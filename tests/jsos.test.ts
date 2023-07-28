@@ -114,9 +114,12 @@ test('Testing Variable', async () => {
     const variable = await jsos.variable("aTestVar")
     let shouldBeNull = await variable.get();
     assert(shouldBeNull.object === null, "variable get for null value failed");
-    variable.set(["a string"]);
-    variable.update(oldVal => {
+    await variable.set(["a string"]);
+    const gotVar = await variable.get();
+    assert(_.isEqual(gotVar.object, ["a string"]), "Variable.set() did not work.");
+    await variable.update(oldVal => {
         console.log("old val is: ", oldVal);
         return [...(oldVal as Array<string>), "another string"]
-   });
-}, 600000);
+    });
+    await variable.unsubscribeFromSupabase();
+}, 60000);

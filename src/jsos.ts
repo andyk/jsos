@@ -77,19 +77,16 @@ export function getCachedReference(
 export class JsosClient {
     supabaseClient: SupabaseClient;
     objectsTableName: string;
-    normalizeTableName: string;
-    variablesTableName: string;
+    referencesTableName: string;
 
     constructor(
         supabaseClient: SupabaseClient,
         objectsTableName: string = "jsos_objects",
-        normalizeTableName: string = "jsos_normalize",
-        variablesTableName: string = "jsos_variables"
+        referencesTableName: string = "jsos_refs"
     ) {
         this.supabaseClient = supabaseClient;
         this.objectsTableName = objectsTableName;
-        this.normalizeTableName = normalizeTableName;
-        this.variablesTableName = variablesTableName;
+        this.referencesTableName = referencesTableName;
     }
 
     async writeObjectToDatabase(object: Json): Promise<[Json, string]> {
@@ -218,7 +215,6 @@ export class JsosClient {
      * TODO: handle any object by dropping properties that aren't of type Json.
      */
     async putObject(object, normalize = true): Promise<Json> {
-        console.log("putObject: ", object);
         /* 
         Returns the object that was written to (or already existed in) the database.
         */
@@ -267,13 +263,13 @@ export class JsosClient {
         let { data: row, error } =
             namespace === null
                 ? await this.supabaseClient
-                      .from(this.variablesTableName)
+                      .from(this.referencesTableName)
                       .select("object")
                       .eq("name", name)
                       .is("namespace", namespace) // Use .is because name is NULL
                       .maybeSingle()
                 : await this.supabaseClient
-                      .from(this.variablesTableName)
+                      .from(this.referencesTableName)
                       .select("object")
                       .eq("name", name)
                       .eq("namespace", namespace) // Use .eq because name is NOT NULL
@@ -293,7 +289,7 @@ export class JsosClient {
         useCache: boolean = true
     ): Promise<boolean> => {
         const { data: row, error } = await this.supabaseClient
-            .from(this.variablesTableName)
+            .from(this.referencesTableName)
             .insert({ name: name, namespace: namespace, object: sha1 })
             .select("object")
             .maybeSingle();
@@ -336,9 +332,10 @@ export class JsosClient {
 
     variable = async (
         name: string,
-        namespace: string | null = null
+        namespace: string | null = null,
+        updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
-        return Variable.create(this, name, namespace);
+        return await Variable.create(this, name, namespace, updateCallback);
     };
 }
 
@@ -353,51 +350,60 @@ export class Variable {
     name: string;
     namespace: string | null;
     objectSha1: string;
-    supabaseSubcription: RealtimeChannel | null;
+    updateCallback: (newObject: any, newSha1: string) => void;
+    #supabaseSubcription: RealtimeChannel | null;
 
     constructor(
         jsosClient: JsosClient,
         name: string,
         object: string,
         namespace: string | null = null,
-        updatedCallback?: (newObject: any, newSha1: string) => void
+        updateCallback?: (newObject: any, newSha1: string) => void
     ) {
         this.jsosClient = jsosClient;
         this.name = name;
         this.namespace = namespace;
         this.objectSha1 = object;
+        this.updateCallback = updateCallback;
+    }
+    
+    get supabaseSubcription(): RealtimeChannel | null {
+        return this.#supabaseSubcription;
+    }
+
+    subscribeToSupabase = async () => {
         //Subscribe to updates from supabase.
-        this.supabaseSubcription = this.jsosClient.supabaseClient
+        this.#supabaseSubcription = await this.jsosClient.supabaseClient
             .channel("any")
             .on(
                 "postgres_changes",
                 {
                     event: "*",
                     schema: "public",
-                    table: this.jsosClient.variablesTableName,
-                    filter: `name=eq.${name}`,
+                    table: this.jsosClient.referencesTableName,
+                    filter: `name=eq.${this.name}`,
                 },
                 (payload) => {
                     console.log(
-                        `got update for var name ${name} from supabase realtime: `,
+                        `got update for var name ${this.name} from supabase realtime: `,
                         payload
                     );
                     if (payload.new["namespace"] === this.namespace) {
                         this.objectSha1 = payload.new["object"];
                     }
-                    if (updatedCallback) {
-                        updatedCallback(this.get(), payload.new["object"]);
+                    if (this.updateCallback) {
+                        this.updateCallback(this.get(), payload.new["object"]);
                     }
                 }
             )
-            .subscribe();
+            .subscribe((status: string) => console.log(status));
     }
 
     static create = async (
         jsosClient: JsosClient,
         name: string,
         namespace: string | null = null,
-        updatedCallback?: (newObject: any, newSha1: string) => void
+        updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
         /* If this variable exists already, fetch & return it. Else create it and
          * initialize it to wrap PersistentObject(null) */
@@ -408,7 +414,7 @@ export class Variable {
                 name,
                 sha1,
                 namespace,
-                updatedCallback
+                updateCallback
             );
         } else {
             const nullSha1 = await getSha1(await jsosClient.putObject(null));
@@ -418,17 +424,20 @@ export class Variable {
                 name,
                 nullSha1,
                 namespace,
-                updatedCallback
+                updateCallback
             );
         }
     };
 
-    unsubscribeFromSupabaseUpdates = () => {
-        if (this.supabaseSubcription) {
-            this.jsosClient.supabaseClient.removeChannel(
-                this.supabaseSubcription
+    unsubscribeFromSupabase = async (): Promise<void> => {
+        if (this.#supabaseSubcription) {
+            const res = await this.jsosClient.supabaseClient.removeChannel(
+                this.#supabaseSubcription
             );
-            this.supabaseSubcription = null;
+            if (res === "error" || res === "timed out") {
+                console.error("Error unsubscribing from supabase updates: ", res);
+            }
+            this.#supabaseSubcription = null;
         }
     };
 
@@ -445,11 +454,13 @@ export class Variable {
     set = async (
         newVal: JObject | PersistentObject
     ): Promise<PersistentObject> => {
+        /* TODO: We might need to use a lock to handle race conditions between
+         * this function and updates done by the supbase subscription callback. */
         if (!isPersistentObject(newVal)) {
             newVal = await this.jsosClient.persistentObject(newVal);
         }
         const { error } = await this.jsosClient.supabaseClient
-            .from(this.jsosClient.variablesTableName)
+            .from(this.jsosClient.referencesTableName)
             .update({ object: newVal.sha1 })
             .eq("name", this.name)
             .eq("namespace", this.namespace)
@@ -457,6 +468,7 @@ export class Variable {
         if (error) {
             throw error;
         }
+        this.objectSha1 = newVal.sha1;
         return newVal;
     };
 
@@ -469,7 +481,7 @@ export class Variable {
         */
         const currVal = await this.get();
         const newVal = await currVal.update(updateFn);
-        return this.set(newVal);
+        return await this.set(newVal);
     };
 }
 
