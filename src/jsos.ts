@@ -189,7 +189,12 @@ export class JsosClient {
         } else {
             denormalizedJson = json;
         }
-        if (json && typeof json === "object" && denormalizedJson && typeof denormalizedJson === "object") {
+        if (
+            json &&
+            typeof json === "object" &&
+            denormalizedJson &&
+            typeof denormalizedJson === "object"
+        ) {
             for (let k in json) {
                 if (
                     json[k] &&
@@ -365,14 +370,51 @@ export class Variable {
         this.namespace = namespace;
         this.objectSha1 = object;
         this.updateCallback = updateCallback;
+        this.#supabaseSubcription = null;
     }
-    
-    get supabaseSubcription(): RealtimeChannel | null {
+
+    get supabaseSubscription(): RealtimeChannel | null {
         return this.#supabaseSubcription;
     }
 
-    subscribeToSupabase = async () => {
+    subscribed(): boolean {
+        return (
+            this.#supabaseSubcription !== null &&
+            this.#supabaseSubcription !== undefined
+        );
+    }
+
+    subscribeToSupabase = async (force: boolean = false) => {
         //Subscribe to updates from supabase.
+        if (this.subscribed()) {
+            return;
+        }
+        const remoteSha1 = await this.jsosClient.getReference(
+            this.name,
+            this.namespace
+        );
+        if (this.objectSha1 !== remoteSha1) {
+            console.debug(
+                "remote sha1 for var name " +
+                    this.name +
+                    " is " +
+                    remoteSha1 +
+                    " but local sha1 is " +
+                    this.objectSha1
+            );
+            if (force) {
+                console.debug(
+                    "force=true, so updating local sha1 to match remote sha1."
+                );
+                this.objectSha1 = remoteSha1;
+            } else {
+                console.error(
+                    "force=false, and out of sync w/ remote, so not subscribing " +
+                    "to supabase updates. You may want to re-run subscribeToSupabase() " +
+                    "with force=true to update the local sha1 to match the remote sha1."
+                );
+            }
+        }
         this.#supabaseSubcription = await this.jsosClient.supabaseClient
             .channel("any")
             .on(
@@ -384,7 +426,7 @@ export class Variable {
                     filter: `name=eq.${this.name}`,
                 },
                 (payload) => {
-                    console.log(
+                    console.debug(
                         `got update for var name ${this.name} from supabase realtime: `,
                         payload
                     );
@@ -396,8 +438,21 @@ export class Variable {
                     }
                 }
             )
-            .subscribe((status: string) => console.log(status));
-    }
+            .subscribe();
+        /*.subscribe((status: string, err: Error) => {
+                if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+                    console.error(
+                        `Error subscribing to supabase updates for var name ${this.name}: `,
+                        status
+                    );
+                    if (err) {
+                        console.error("Error from supabase subscription: ", err);
+                    }
+                    this.#supabaseSubcription = null;
+                }
+            });
+            */
+    };
 
     static create = async (
         jsosClient: JsosClient,
@@ -408,8 +463,9 @@ export class Variable {
         /* If this variable exists already, fetch & return it. Else create it and
          * initialize it to wrap PersistentObject(null) */
         const sha1 = await jsosClient.getReference(name, namespace);
+        let newVar;
         if (sha1) {
-            return new Variable(
+            newVar = new Variable(
                 jsosClient,
                 name,
                 sha1,
@@ -419,7 +475,7 @@ export class Variable {
         } else {
             const nullSha1 = await getSha1(await jsosClient.putObject(null));
             await jsosClient.putReference(name, namespace, nullSha1);
-            return new Variable(
+            newVar = new Variable(
                 jsosClient,
                 name,
                 nullSha1,
@@ -427,15 +483,20 @@ export class Variable {
                 updateCallback
             );
         }
+        await newVar.subscribeToSupabase();
+        return newVar;
     };
 
     unsubscribeFromSupabase = async (): Promise<void> => {
-        if (this.#supabaseSubcription) {
+        if (this.subscribed()) {
             const res = await this.jsosClient.supabaseClient.removeChannel(
                 this.#supabaseSubcription
             );
             if (res === "error" || res === "timed out") {
-                console.error("Error unsubscribing from supabase updates: ", res);
+                console.error(
+                    "Error unsubscribing from supabase updates: ",
+                    res
+                );
             }
             this.#supabaseSubcription = null;
         }
@@ -459,17 +520,47 @@ export class Variable {
         if (!isPersistentObject(newVal)) {
             newVal = await this.jsosClient.persistentObject(newVal);
         }
-        const { error } = await this.jsosClient.supabaseClient
+        const { data: row, error } = await this.jsosClient.supabaseClient
             .from(this.jsosClient.referencesTableName)
             .update({ object: newVal.sha1 })
             .eq("name", this.name)
             .eq("namespace", this.namespace)
-            .eq("object", this.objectSha1);
+            .eq("object", this.objectSha1)
+            .select()
+            .maybeSingle();
         if (error) {
             throw error;
         }
-        this.objectSha1 = newVal.sha1;
-        return newVal;
+        if (!row) {
+            const { data: innerRow, error } = await this.jsosClient.supabaseClient
+                .from(this.jsosClient.referencesTableName)
+                .update({ object: newVal.sha1 })
+                .eq("name", this.name)
+                .eq("namespace", this.namespace)
+                .select()
+                .maybeSingle();
+            if (error) {
+                throw error;
+            }
+            if (innerRow) { 
+                throw new Error(
+                    `Object with sha1 '${this.objectSha1}' not found in database. ` +
+                    "This variable was probably updated by somebody asynchronously " +
+                    "and the update did not make it back to this copy of the variable. " +
+                    "Is this variable subscribed() to supabase updates? If not you " +
+                    "should subscribe() to supabase updates to avoid this error."
+                );
+            } else {
+                throw new Error(
+                    `No ref found in supabase with name ${this.name} ` +
+                    `and namespace ${this.namespace}. The associated with this variable` +
+                    `may have been  deleted from supabase since you created this variable.`
+                );
+            }
+        } else {
+            this.objectSha1 = newVal.sha1;
+            return newVal;
+        }
     };
 
     update = async (updateFn: (currVal: JObject) => JObject) => {

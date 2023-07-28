@@ -112,6 +112,7 @@ test('Testing nested PersistentOrderedMap', async () => {
 
 test('Testing Variable', async () => {
     const variable = await jsos.variable("aTestVar")
+    assert(variable.subscribed(), "Variable did not subscribe to supabase.");
     let shouldBeNull = await variable.get();
     assert(shouldBeNull.object === null, "variable get for null value failed");
     await variable.set(["a string"]);
@@ -122,4 +123,5 @@ test('Testing Variable', async () => {
         return [...(oldVal as Array<string>), "another string"]
     });
     await variable.unsubscribeFromSupabase();
+    assert(!variable.subscribed(), "Variable.unsubscribeFromSupabase() did not work.");
 }, 60000);
