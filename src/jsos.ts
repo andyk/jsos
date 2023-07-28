@@ -265,20 +265,16 @@ export class JsosClient {
         name: string,
         namespace: string | null = null
     ): Promise<string | undefined> => {
-        let { data: row, error } =
+        let queryBuilder = this.supabaseClient
+            .from(this.referencesTableName)
+            .select("object")
+            .eq("name", name);
+        // Use "is" for NULL and "eq" for non-null
+        queryBuilder =
             namespace === null
-                ? await this.supabaseClient
-                      .from(this.referencesTableName)
-                      .select("object")
-                      .eq("name", name)
-                      .is("namespace", namespace) // Use .is because name is NULL
-                      .maybeSingle()
-                : await this.supabaseClient
-                      .from(this.referencesTableName)
-                      .select("object")
-                      .eq("name", name)
-                      .eq("namespace", namespace) // Use .eq because name is NOT NULL
-                      .maybeSingle();
+                ? queryBuilder.is("namespace", namespace)
+                : queryBuilder.eq("namespace", namespace);
+        let { data: row, error } = await queryBuilder.maybeSingle();
         if (error) {
             throw error;
         }
@@ -338,9 +334,16 @@ export class JsosClient {
     variable = async (
         name: string,
         namespace: string | null = null,
+        subscribeToSupabase: boolean = true,
         updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
-        return await Variable.create(this, name, namespace, updateCallback);
+        return await Variable.create(
+            this,
+            name,
+            namespace,
+            subscribeToSupabase,
+            updateCallback
+        );
     };
 }
 
@@ -410,8 +413,8 @@ export class Variable {
             } else {
                 console.error(
                     "force=false, and out of sync w/ remote, so not subscribing " +
-                    "to supabase updates. You may want to re-run subscribeToSupabase() " +
-                    "with force=true to update the local sha1 to match the remote sha1."
+                        "to supabase updates. You may want to re-run subscribeToSupabase() " +
+                        "with force=true to update the local sha1 to match the remote sha1."
                 );
             }
         }
@@ -458,6 +461,7 @@ export class Variable {
         jsosClient: JsosClient,
         name: string,
         namespace: string | null = null,
+        subscribeToSupabase: boolean = true,
         updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
         /* If this variable exists already, fetch & return it. Else create it and
@@ -483,7 +487,9 @@ export class Variable {
                 updateCallback
             );
         }
-        await newVar.subscribeToSupabase();
+        if (subscribeToSupabase) {
+            await newVar.subscribeToSupabase();
+        }
         return newVar;
     };
 
@@ -520,41 +526,45 @@ export class Variable {
         if (!isPersistentObject(newVal)) {
             newVal = await this.jsosClient.persistentObject(newVal);
         }
-        const { data: row, error } = await this.jsosClient.supabaseClient
+        let queryBuilder = this.jsosClient.supabaseClient
             .from(this.jsosClient.referencesTableName)
             .update({ object: newVal.sha1 })
             .eq("name", this.name)
-            .eq("namespace", this.namespace)
-            .eq("object", this.objectSha1)
-            .select()
-            .maybeSingle();
+            .eq("object", this.objectSha1);
+        // use "is" to test against null and "eq" for non-null.
+        queryBuilder =
+            this.namespace === null
+                ? queryBuilder.is("namespace", this.namespace)
+                : queryBuilder.eq("namespace", this.namespace);
+        const { data: row, error } = await queryBuilder.select().maybeSingle();
         if (error) {
             throw error;
         }
         if (!row) {
-            const { data: innerRow, error } = await this.jsosClient.supabaseClient
-                .from(this.jsosClient.referencesTableName)
-                .update({ object: newVal.sha1 })
-                .eq("name", this.name)
-                .eq("namespace", this.namespace)
-                .select()
-                .maybeSingle();
+            const { data: innerRow, error } =
+                await this.jsosClient.supabaseClient
+                    .from(this.jsosClient.referencesTableName)
+                    .update({ object: newVal.sha1 })
+                    .eq("name", this.name)
+                    .eq("namespace", this.namespace)
+                    .select()
+                    .maybeSingle();
             if (error) {
                 throw error;
             }
-            if (innerRow) { 
+            if (innerRow) {
                 throw new Error(
                     `Object with sha1 '${this.objectSha1}' not found in database. ` +
-                    "This variable was probably updated by somebody asynchronously " +
-                    "and the update did not make it back to this copy of the variable. " +
-                    "Is this variable subscribed() to supabase updates? If not you " +
-                    "should subscribe() to supabase updates to avoid this error."
+                        "This variable was probably updated by somebody asynchronously " +
+                        "and the update did not make it back to this copy of the variable. " +
+                        "Is this variable subscribed() to supabase updates? If not you " +
+                        "should subscribe() to supabase updates to avoid this error."
                 );
             } else {
                 throw new Error(
                     `No ref found in supabase with name ${this.name} ` +
-                    `and namespace ${this.namespace}. The associated with this variable` +
-                    `may have been  deleted from supabase since you created this variable.`
+                        `and namespace ${this.namespace}. The associated with this variable ` +
+                        `may have been deleted from supabase since you created this variable.`
                 );
             }
         } else {
@@ -634,10 +644,7 @@ export class PersistentObject implements PersistentObjectInterface {
     async update(
         updateFn: (currVal: JObject) => JObject
     ): Promise<PersistentObject> {
-        const newVal = await updateFn(this.#normalizedObject);
-        if (typeof newVal === "object" && newVal === this.#normalizedObject) {
-            throw new Error("updateFn must return a new object");
-        }
+        const newVal = updateFn(this.object);
         return PersistentObject.create(this.jsosClient, newVal);
     }
 }

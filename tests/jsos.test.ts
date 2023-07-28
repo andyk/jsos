@@ -111,7 +111,9 @@ test('Testing nested PersistentOrderedMap', async () => {
 }, 60000);
 
 test('Testing Variable', async () => {
-    const variable = await jsos.variable("aTestVar")
+    //http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
+    const randStr = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15); 
+    const variable = await jsos.variable(randStr);
     assert(variable.subscribed(), "Variable did not subscribe to supabase.");
     let shouldBeNull = await variable.get();
     assert(shouldBeNull.object === null, "variable get for null value failed");
@@ -119,9 +121,18 @@ test('Testing Variable', async () => {
     const gotVar = await variable.get();
     assert(_.isEqual(gotVar.object, ["a string"]), "Variable.set() did not work.");
     await variable.update(oldVal => {
-        console.log("old val is: ", oldVal);
         return [...(oldVal as Array<string>), "another string"]
     });
+    const gotAgain = await variable.get();
+    assert(_.isEqual(gotAgain.object, ["a string", "another string"]), "Variable.update() did not work.");
     await variable.unsubscribeFromSupabase();
     assert(!variable.subscribed(), "Variable.unsubscribeFromSupabase() did not work.");
-}, 60000);
+    //Sleep to give supabase time to cleanup the websocket connection
+    function sleep(ms: number) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    async function delayedFunction() {
+        await sleep(300);
+    }
+    await delayedFunction();
+}, 100000);
