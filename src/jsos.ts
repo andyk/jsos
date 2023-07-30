@@ -3,7 +3,48 @@ import { Collection, OrderedMap, List } from "immutable";
 import hash from "object-hash";
 import supabase from "./supabase";
 import _ from "lodash";
-import fs from "fs";
+//import fs from "fs";
+
+/*
+async function loadCache(cacheName: string) {
+    // Browser
+    if (typeof window !== 'undefined') {
+      return new Promise((resolve, reject) => {
+        const openDBRequest = indexedDB.open(cacheName);
+  
+        openDBRequest.onerror = function(event) {
+          console.error("Error opening IndexedDB:", event);
+          reject((event.target as IDBOpenDBRequest).error);
+        };
+  
+        openDBRequest.onsuccess = function(event) {
+          const db = (event.target as IDBOpenDBRequest).result;
+          const transaction = db.transaction(cacheName);
+          const objectStore = transaction.objectStore(cacheName);
+          const getRequest = objectStore.get(cacheName);
+  
+          getRequest.onerror = function(event) {
+            console.error("Error getting data from IndexedDB:", event);
+            reject((event.target as IDBRequest).error);
+          };
+  
+          getRequest.onsuccess = function(event) {
+            resolve((event.target as IDBRequest).result || {});
+          };
+        };
+      });
+    } else {
+      // Node.js
+      const fs = require('fs');
+      if (fs.existsSync(cacheName)) {
+        const cacheData = fs.readFileSync(cacheName, "utf8");
+        return JSON.parse(cacheData);
+      } else {
+        return {};
+      }
+    }
+  }
+ */ 
 
 type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
 type JObject = Json | Collection<any, any> | undefined;
@@ -15,7 +56,7 @@ const LIST_KEY = "~#iL";
 const DENORMALIZED_OBJECT_KEY = "~#N"; // This one is our own invention.
 // TODO: add Map (iM), Set (iS), OrderedSet (iO), Stack (iStk), ??? and Null (_) ???
 
-function isPlainObject(obj): obj is { [key: string]: any } {
+function isPlainObject(obj: any): obj is { [key: string]: any } {
     return (
         typeof obj === "object" &&
         obj !== null &&
@@ -24,21 +65,13 @@ function isPlainObject(obj): obj is { [key: string]: any } {
     );
 }
 
-function isPersistentObject(obj): obj is PersistentObject {
+function isPersistentObject(obj: any): obj is PersistentObject {
     return obj?.isPersistentObject?.();
 }
 
-function loadCache(cacheFilename: string) {
-    if (fs.existsSync(cacheFilename)) {
-        const cacheData = fs.readFileSync(cacheFilename, "utf8");
-        return JSON.parse(cacheData);
-    } else {
-        return {};
-    }
-}
-
 const OBJ_CACHE_FILE_PATH = "./objectCache.json";
-let objectCache = loadCache(OBJ_CACHE_FILE_PATH);
+//let objectCache = await loadCache(OBJ_CACHE_FILE_PATH);
+let objectCache: { [key: string]: Json } = {};
 
 export function getSha1(o: any): string {
     if (o && typeof o.sha1 === "string") {
@@ -47,15 +80,16 @@ export function getSha1(o: any): string {
     return hash(o, { algorithm: "sha1", encoding: "hex" });
 }
 
-export function cacheObject(object): [Json, string] {
+export function cacheObject(object: Json): [Json, string] | [undefined, undefined] {
     const sha1 = getSha1(object);
     objectCache[sha1] = object;
-    fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
+    //fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
     return [object, sha1];
 }
 
 const REF_CACHE_FILE_PATH = "./referenceCache.json";
-let referenceCache = loadCache(REF_CACHE_FILE_PATH);
+//let referenceCache = loadCache(REF_CACHE_FILE_PATH);
+let referenceCache: { [key: string]: any} = {}
 
 export function cacheReference(
     name: string,
@@ -63,7 +97,7 @@ export function cacheReference(
     sha1: string
 ): boolean {
     referenceCache[name + "-" + namespace] = sha1;
-    fs.writeFileSync(REF_CACHE_FILE_PATH, JSON.stringify(referenceCache));
+    //fs.writeFileSync(REF_CACHE_FILE_PATH, JSON.stringify(referenceCache));
     return true;
 }
 
@@ -429,10 +463,6 @@ export class Variable {
                     filter: `name=eq.${this.name}`,
                 },
                 (payload) => {
-                    console.debug(
-                        `got update for var name ${this.name} from supabase realtime: `,
-                        payload
-                    );
                     if (payload.new["namespace"] === this.namespace) {
                         this.objectSha1 = payload.new["object"];
                     }
