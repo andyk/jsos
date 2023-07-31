@@ -538,7 +538,7 @@ export class Variable {
         }
     };
 
-    get = async () => {
+    get = async (): Promise<PersistentObject> => {
         const obj = await this.jsosClient.getPersistentObject(this.objectSha1);
         if (!obj) {
             throw Error(
