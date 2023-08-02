@@ -69,7 +69,7 @@ test('Testing PersistentObject', async () => {
     // gotObj.set("g", "gg");
 }, 20000);
 
-test('Testing PersistentOrderedMap', async () => {
+test('Testing PersistentObject including OrderedMap', async () => {
     /*
     let x = await jsos.orderedMap<string, string>({ a: "aa" });
     console.log(await x.get("a"));
@@ -77,15 +77,15 @@ test('Testing PersistentOrderedMap', async () => {
     console.log(y);
     */
 
-    const orig = [[2, 22], [1, 11], ["a", "aa"]];
-    const om = await jsos.persistentOrderedMap(orig);
-    const otherOm = await jsos.getPersistentOrderedMap(om.sha1)
+    const om = OrderedMap<string|number, string|number>([[2, 22], [1, 11], ["a", "aa"]]);
+    const po = await jsos.persistentObject(om);
+    const otherPo = await jsos.getPersistentObject(po.sha1)
     assert(
-        otherOm && om.orderedMap.equals(otherOm.orderedMap) && om.equals(otherOm),
+        po && otherPo && om.equals(otherPo.object),
         "orderedMap put and get were not inverses: " +
-            JSON.stringify(om.orderedMap) +
+            JSON.stringify(po.object) +
             ", " +
-            JSON.stringify(otherOm?.orderedMap || null)
+            JSON.stringify(otherPo?.object || null)
     );
     const newOm = await om.set("b", "bb");
     const newOtherOm = await jsos.getPersistentOrderedMap(newOm.sha1)
