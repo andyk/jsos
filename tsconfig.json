@@ -1,8 +1,8 @@
 {
     "compilerOptions": {
       //"strict": true,
-      "target": "es2022", // "es2018",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
-      "module": "commonJS", //"es2022",                                /* Specify what module code is generated. */
+      "target": "es2018",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
+      "module": "es2022",                                /* Specify what module code is generated. */
       "moduleResolution": "nodenext",
       "outDir": "./dist", 
       "rootDir": "./src", 
