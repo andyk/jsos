@@ -1,21 +1,10 @@
 import { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
-import {
-    Collection,
-    isCollection,
-    List,
-    Map as ImmutableMap,
-    Set,
-    OrderedMap,
-    OrderedSet,
-    Stack,
-    Record,
-    fromJS,
-    FromJS,
-} from "immutable";
+import { Collection, List, Map as ImmutableMap, Set, OrderedMap, OrderedSet, Stack, Record, fromJS, FromJS } from "immutable";
 import hash from "object-hash";
 import supabase from "./supabase";
 import _ from "lodash";
 //import fs from "fs";
+
 
 /*
 =============================================================
@@ -93,7 +82,7 @@ async function loadCache(cacheName: string) {
  */
 
 // TODO: figure out if using unknown here is really dumb.
-type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
+type Json = string | number | boolean | null | unknown | { [key: string]: Json } | Json[];
 type JObject = Json | Collection<any, any> | undefined;
 
 // Re-using seriealization special keys from
@@ -108,23 +97,6 @@ const RECORD_KEY = "~#iR";
 const DENORMALIZED_OBJECT_KEY = "~#N"; // This one is our own invention.
 // TODO: add Map (iM), Set (iS), OrderedSet (iO), Stack (iStk), ??? and Null (_) ???
 
-type SerializationKeys =
-    | typeof MAP_KEY
-    | typeof LIST_KEY
-    | typeof SET_KEY
-    | typeof ORDERED_MAP_KEY
-    | typeof ORDERED_SET_KEY
-    | typeof STACK_KEY
-    | typeof RECORD_KEY;
-type toObjectReturn<K, V> = ReturnType<Collection<K, V>["toObject"]>;
-type toArrayReturn<K, V> = ReturnType<Collection.Keyed<K, V>["toArray"]>;
-
-type SerializedCollection<K, V> = (
-    | SerializationKeys
-    | toObjectReturn<K, V>
-    | toArrayReturn<K, V>
-)[];
-
 function isPlainObject(obj: any): obj is { [key: string]: any } {
     return (
         typeof obj === "object" &&
@@ -134,8 +106,12 @@ function isPlainObject(obj: any): obj is { [key: string]: any } {
     );
 }
 
-function isPersistentObject(obj: any): obj is PersistentObject {
-    return obj?.isPersistentObject?.();
+function isPersistentCollection<K, V>(obj: any): obj is PersistentCollection<K, V> {
+    return obj?.isPersistentCollection?.();
+}
+
+function isCollection<K, V>(obj: any): obj is Collection<K, V> {
+    return obj?.isCollection?.();
 }
 
 const OBJ_CACHE_FILE_PATH = "./objectCache.json";
@@ -150,10 +126,14 @@ export function getSha1(o: any): string {
 }
 
 export function cacheObject(
-    object: Json
-): [Json, string] {
+    object: JObject
+): [Json, string] | [undefined, undefined] {
     const sha1 = getSha1(object);
-    objectCache[sha1] = object;
+    if (isCollection(object)) {
+        objectCache[sha1] = object.toJS();
+    } else {
+        objectCache[sha1] = object;
+    }
     //fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
     return [object, sha1];
 }
@@ -177,71 +157,6 @@ export function getCachedReference(
     namespace: string
 ): string | undefined {
     return referenceCache[name + "-" + namespace];
-}
-
-export function encodeImmutable<K, V>(
-    object: Collection<K, V>
-): any {
-    /* Shallow encoding of an Immutable-js object.  This needs to be called by a
-     * recursive function to encode nested Immutable objects. */
-    if (OrderedMap.isOrderedMap(object)) {
-        // NOTE: the OrderedMap data structure is special because we have to
-        // serialize it as an Array<Array> if we want to guarantee that the
-        // order of the keys is preserved because calling toObject() in it
-        // returns a JS object which does not preserve key order for integer
-        // keys.
-        return [ORDERED_MAP_KEY, (object as OrderedMap<K, V>).toArray()];
-    }
-    if (ImmutableMap.isMap(object)) {
-        return [MAP_KEY, (object as ImmutableMap<K, V>).toObject()];
-    }
-    if (List.isList(object)) {
-        return [LIST_KEY, object.toObject()];
-    }
-    if (Set.isSet(object)) {
-        return [SET_KEY, object.toObject()];
-    }
-    if (OrderedSet.isOrderedSet(object)) {
-        // Need a type cast here because of a bug in Immutable.js:
-        // https://github.com/immutable-js/immutable-js/issues/1947
-        return [ORDERED_SET_KEY, (object as Collection<K, V>).toObject()];
-    }
-    if (Stack.isStack(object)) {
-        return [STACK_KEY, object.toObject()];
-    }
-    if (Record.isRecord(object)) {
-        throw "Immutable.Record serialization not yet supported.";
-        //return [RECORD_KEY, object.toObject()];
-    }
-    throw Error("Unsupported Immutable type: " + object);
-}
-
-export function decodeImmutable<T>(object: T): T | Collection<any, any> {
-    if (Array.isArray(object)) {
-        if (object?.[0] === ORDERED_MAP_KEY) {
-            return OrderedMap(object[1] as Array<any>);
-        }
-        if (object?.[0] === MAP_KEY) {
-            return ImmutableMap(object[1]);
-        }
-        if (object?.[0] === LIST_KEY) {
-            return List(object[1]);
-        }
-        if (object?.[0] === SET_KEY) {
-            return Set(object[1]);
-        }
-        if (object?.[0] === ORDERED_SET_KEY) {
-            return OrderedSet(object[1]);
-        }
-        if (object?.[0] === STACK_KEY) {
-            return Stack(object[1]);
-        }
-        if (object?.[0] === RECORD_KEY) {
-            throw "Immutable.Record deserialization not yet supported.";
-            //return Record(object[1]);
-        }
-    }
-    return object;
 }
 
 export class JsosClient {
@@ -337,7 +252,24 @@ export class JsosClient {
         if (denormalize && !foundDenormalizedRef) {
             json = this.denormalizeObject(json);
         }
-        return decodeImmutable(json);
+        if (Array.isArray(json)) {
+            if (json?.[0] === ORDERED_MAP_KEY) {
+                return OrderedMap(json[1] as Array<any>);
+            } else if (json?.[0] === MAP_KEY) {
+                return ImmutableMap(json[1]);
+            } else if (json?.[0] === LIST_KEY) {
+                return List(json[1]);
+            } else if (json?.[0] === SET_KEY) {
+                return Set(json[1]);
+            } else if (json?.[0] === ORDERED_SET_KEY) {
+                return OrderedSet(json[1]);
+            } else if (json?.[0] === STACK_KEY) {
+                return Stack(json[1]);
+            } else if (json?.[0] === RECORD_KEY) {
+                return Record(json[1]);
+            }
+        }
+        return json;
     }
 
     denormalizeObject = async (json: Json): Promise<JObject> => {
@@ -360,9 +292,9 @@ export class JsosClient {
         ) {
             for (let k in json) {
                 if (
-                    (json as any)[k] &&
-                    typeof (json as any)[k] === "string" &&
-                    (json as any)[k].startsWith("ref:")
+                    json[k] &&
+                    typeof json[k] === "string" &&
+                    json[k].startsWith("ref:")
                 ) {
                     denormalizedJson[k] = await this.getObject(
                         json[k].slice(4)
@@ -386,22 +318,44 @@ export class JsosClient {
      *
      * TODO: handle any object by dropping properties that aren't of type Json.
      */
-    async putObject(object: JObject, normalize: boolean = true): Promise<Json> {
+    async putObject(object: JObject, normalize = true): Promise<Json> {
         /* 
-        Serialize Immutable.Collections specially by wrapping them in
-        [<SPECIAL_TOKEN_STR>, <JSON_SERIALIZED_COLLECTION>].
+        This users a special version of JSON serializes Immutable.Collections specially
+        by wrapping them in [<SPECIAL_TOKEN_STR>, <JSON_SERIALIZED_COLLECTION>].
 
         Returns the object that was written to (or already existed in) the database.
         */
         let normalizedJson;
         if (normalize && object && typeof object === "object") {
-            if (isCollection(object)) {
-                normalizedJson = encodeImmutable(object);
+            if (OrderedMap.isOrderedMap(object)) {
+                // NOTE: the OrderedMap data structure is special because we have to
+                // serialize it as an Array<Array> if we want to guarantee that the
+                // order of the keys is preserved because calling toObject() in it
+                // returns a JS object which does not preserve key order for integer
+                // keys. 
+                normalizedJson = [ORDERED_MAP_KEY, object.toArray()];
+            } else if (ImmutableMap.isMap(object)) {
+                normalizedJson = [MAP_KEY, object.toObject()];
+            } else if (List.isList(object)) {
+                normalizedJson = [LIST_KEY, object.toObject()];
+            } else if (Set.isSet(object)) {
+                normalizedJson = [SET_KEY, object.toObject()];
+            } else if (OrderedSet.isOrderedSet(object)) {
+                // Need a type cast here because of a bug in Immutable.js:
+                // https://github.com/immutable-js/immutable-js/issues/1947
+                normalizedJson = [ORDERED_SET_KEY, (object as OrderedSet<unknown>).toObject()];
+            } else if (Stack.isStack(object)) {
+                normalizedJson = [STACK_KEY, object.toObject()];
+            } else if (Record.isRecord(object)) {
+                normalizedJson = [RECORD_KEY, object.toObject()];
             } else if (isPlainObject(object)) {
                 normalizedJson = { ...object };
             } else if (Array.isArray(object)) {
                 normalizedJson = [...object];
             } else {
+
+const STACK_KEY = "~#iStk";
+const RECORD_KEY = "~#iR";
                 throw Error(
                     "unsupported object type, only plain objects, " +
                         "arrays, and Immutable.Collections are supported."
@@ -422,10 +376,10 @@ export class JsosClient {
         );
 
         // Locally cache denormalized Object
-        //let denormalizedSha1 = cacheObject(object)[1];
-        //if (denormalizedSha1 !== sha1) {
-        //    cacheReference(sha1, DENORMALIZED_OBJECT_KEY, denormalizedSha1);
-        //}
+        let denormalizedSha1 = cacheObject(object)[1];
+        if (denormalizedSha1 !== sha1) {
+            cacheReference(sha1, DENORMALIZED_OBJECT_KEY, denormalizedSha1);
+        }
         return writtenNormalized;
     }
 
@@ -505,20 +459,19 @@ export class JsosClient {
         return PersistentCollection.create<K, V>(this, collection);
     };
 
-    /*getPersistentCollection = async <K, V>(
+    getPersistentCollection = async <K, V>(
         sha1: string
     ): Promise<PersistentCollection<K, V> | undefined> => {
         const jObject = await this.getObject(sha1);
         if (
             typeof jObject === "object" &&
             jObject !== null &&
-            isCollection(jObject)
+            isCollection<K, V>(jObject)
         ) {
             const collection = jObject;
             return PersistentCollection.create<K, V>(this, collection);
         }
     };
-    */
 
     variable = async (
         name: string,
@@ -553,14 +506,14 @@ export class Variable {
     constructor(
         jsosClient: JsosClient,
         name: string,
-        objectSha1: string,
+        object: string,
         namespace: string | null = null,
         callbackOnChange?: (newObject: any, newSha1: string) => void
     ) {
         this.jsosClient = jsosClient;
         this.name = name;
         this.namespace = namespace;
-        this.objectSha1 = objectSha1;
+        this.objectSha1 = object;
         this.callbackOnChange = callbackOnChange;
         this.#supabaseSubcription = null;
     }
@@ -693,8 +646,10 @@ export class Variable {
         }
     };
 
-    get = async (): Promise<PersistentObject> => {
-        const obj = await this.jsosClient.getPersistentObject(this.objectSha1);
+    get = async <K, V>(): Promise<PersistentCollection<K, V>> => {
+        const obj = await this.jsosClient.getPersistentCollection<K, V>(
+            this.objectSha1
+        );
         if (!obj) {
             throw Error(
                 `Object with sha1 '${this.objectSha1}' not found in database`
@@ -703,13 +658,14 @@ export class Variable {
         return obj;
     };
 
-    set = async (
-        newVal: JObject | PersistentObject
-    ): Promise<PersistentObject> => {
+    set = async <K, V>(
+        newVal: Json
+    ): Promise<PersistentCollection<K, V>> => {
         /* TODO: We might need to use a lock to handle race conditions between
          * this function and updates done by the supbase subscription callback. */
-        if (!isPersistentObject(newVal)) {
-            newVal = await this.jsosClient.persistentObject(newVal);
+        if (!isPersistentCollection<K,V>(newVal)) {
+            let x = fromJS(newVal)
+            newVal = await this.jsosClient.persistentCollection<K,V>(x);
         }
         let queryBuilder = this.jsosClient.supabaseClient
             .from(this.jsosClient.referencesTableName)
@@ -781,79 +737,12 @@ export interface PersistentObjectInterface {
     ): Promise<PersistentObjectInterface>;
 }
 
-export class PersistentObject {
+export class PersistentObject{
     /*
     A wrapper around primitive and Immutable types (see the FromJS type in the
     immutables lib) that persists its value to the database at creation
     time.  Becuase any mutation-like like operation returns a new object, that
     object is also a PersistentObject, and itself is also automatically
-    persisted.  We wrap the Immutable.Collection types since they already
-    elegantly implement the immutable data collection pattern
-    */
-    #jsosClient: JsosClient;
-    #wrappedObject: JObject;
-    // TODO: define a type to catpure that a normalized wrapped immutable should be flat not recursively nested
-    #normalizedWrappedObject: JObject;
-    sha1: string;
-
-    private constructor(
-        jsosClient: JsosClient,
-        wrappedObject: JObject,
-        normalizedWrappedObject: JObject,
-        sha1: string
-    ) {
-        this.#jsosClient = jsosClient;
-        this.#wrappedObject = wrappedObject;
-        this.#normalizedWrappedObject = normalizedWrappedObject;
-        this.sha1 = sha1;
-    }
-
-    /* Use create pattern since constructor can't be async */
-    static create = async (
-        jsosClient: JsosClient,
-        object: JObject
-    ): Promise<PersistentObject> => {
-        const wrappedObject = await jsosClient.putObject(object, false);
-        const normalizedWrappedObject = await jsosClient.putObject(object);
-        const sha1 = getSha1(normalizedWrappedObject);
-        return new PersistentObject(
-            jsosClient,
-            wrappedObject,
-            normalizedWrappedObject,
-            sha1
-        );
-    };
-
-    get jsosClient(): JsosClient {
-        return this.#jsosClient;
-    }
-
-    get object(): JObject {
-        return this.#wrappedObject;
-    }
-
-    get normalizedObject(): JObject {
-        return this.#normalizedWrappedObject;
-    }
-
-    isPersistentObject(): true {
-        return true;
-    }
-
-    async update(
-        updateFn: (currVal: JObject) => JObject
-    ): Promise<PersistentObject> {
-        const newVal = updateFn(this.object);
-        return PersistentObject.create(this.jsosClient, newVal);
-    }
-}
-
-export class PersistentImmutable {
-    /*
-    A wrapper around primitive and Immutable types (see the FromJS type in the
-    immutables lib) that persists its value to the database at creation
-    time.  Becuase any mutation-like like operation returns a new object, that
-    object is also a PersistentImmutable, and itself is also automatically
     persisted.  We wrap the Immutable.Collection types since they already
     elegantly implement the immutable data collection pattern
     */
@@ -880,15 +769,10 @@ export class PersistentImmutable {
     static create = async (
         jsosClient: JsosClient,
         object: JObject
-    ): Promise<PersistentImmutable> => {
+    ): Promise<PersistentObject> => {
         const normalizedObject = await jsosClient.putObject(object);
         const sha1 = getSha1(normalizedObject);
-        return new PersistentImmutable(
-            jsosClient,
-            fromJS(object),
-            fromJS(normalizedObject),
-            sha1
-        );
+        return new PersistentObject(jsosClient, fromJS(object), fromJS(normalizedObject), sha1);
     };
 
     get jsosClient(): JsosClient {
@@ -904,15 +788,15 @@ export class PersistentImmutable {
         return v;
     }
 
-    isPersistentImmutable(): true {
+    isPersistentObject(): true {
         return true;
     }
 
     async update(
         updateFn: (currVal: JObject) => JObject
-    ): Promise<PersistentImmutable> {
+    ): Promise<PersistentObject> {
         const newVal = updateFn(this.object);
-        return PersistentImmutable.create(this.jsosClient, newVal);
+        return PersistentObject.create(this.jsosClient, newVal);
     }
 }
 
