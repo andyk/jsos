@@ -1,5 +1,5 @@
 import { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
-import { Collection, OrderedMap, List, fromJS, FromJS } from "immutable";
+import { Collection, OrderedMap, List } from "immutable";
 import hash from "object-hash";
 import supabase from "./supabase";
 import _ from "lodash";
@@ -44,7 +44,7 @@ async function loadCache(cacheName: string) {
       }
     }
   }
- */
+ */ 
 
 type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
 type JObject = Json | Collection<any, any> | undefined;
@@ -65,12 +65,8 @@ function isPlainObject(obj: any): obj is { [key: string]: any } {
     );
 }
 
-function isPersistentCollection<K, V>(obj: any): obj is PersistentCollection<K, V> {
-    return obj?.isPersistentCollection?.();
-}
-
-function isCollection<K, V>(obj: any): obj is Collection<K, V> {
-    return obj?.isCollection?.();
+function isPersistentObject(obj: any): obj is PersistentObject {
+    return obj?.isPersistentObject?.();
 }
 
 const OBJ_CACHE_FILE_PATH = "./objectCache.json";
@@ -84,9 +80,7 @@ export function getSha1(o: any): string {
     return hash(o, { algorithm: "sha1", encoding: "hex" });
 }
 
-export function cacheObject(
-    object: Json
-): [Json, string] | [undefined, undefined] {
+export function cacheObject(object: Json): [Json, string] | [undefined, undefined] {
     const sha1 = getSha1(object);
     objectCache[sha1] = object;
     //fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
@@ -95,7 +89,7 @@ export function cacheObject(
 
 const REF_CACHE_FILE_PATH = "./referenceCache.json";
 //let referenceCache = loadCache(REF_CACHE_FILE_PATH);
-let referenceCache: { [key: string]: any } = {};
+let referenceCache: { [key: string]: any} = {}
 
 export function cacheReference(
     name: string,
@@ -207,6 +201,13 @@ export class JsosClient {
         if (denormalize && !foundDenormalizedRef) {
             json = this.denormalizeObject(json);
         }
+        if (Array.isArray(json)) {
+            if (json?.[0] === ORDERED_MAP_KEY) {
+                return OrderedMap(json[1] as Array<any>);
+            } else if (json?.[0] === LIST_KEY) {
+                return List(json[1] as Array<any>);
+            }
+        }
         return json;
     }
 
@@ -244,10 +245,6 @@ export class JsosClient {
         }
         return denormalizedJson;
     };
-
-    getImmutableObject<JSValue>(jsValue: JSValue): FromJS<JSValue> {
-        return fromJS(jsValue);
-    }
 
     /* TODO: normalize via local recursion first, then push all objects with one
      * call to supabase.
@@ -368,38 +365,18 @@ export class JsosClient {
         }
     };
 
-    persistentCollection = async <K, V>(
-        collection: Collection<K, V>
-    ): Promise<PersistentCollection<K, V>> => {
-        return PersistentCollection.create<K, V>(this, collection);
-    };
-
-    getPersistentCollection = async <K, V>(
-        sha1: string
-    ): Promise<PersistentCollection<K, V> | undefined> => {
-        const jObject = await this.getObject(sha1);
-        if (
-            typeof jObject === "object" &&
-            jObject !== null &&
-            isCollection<K, V>(jObject)
-        ) {
-            const collection = jObject;
-            return PersistentCollection.create<K, V>(this, collection);
-        }
-    };
-
     variable = async (
         name: string,
         namespace: string | null = null,
         subscribeToSupabase: boolean = true,
-        callbackOnChange?: (newObject: any, newSha1: string) => void
+        updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
         return await Variable.create(
             this,
             name,
             namespace,
             subscribeToSupabase,
-            callbackOnChange
+            updateCallback
         );
     };
 }
@@ -415,7 +392,7 @@ export class Variable {
     name: string;
     namespace: string | null;
     objectSha1: string;
-    callbackOnChange: (newObject: any, newSha1: string) => void;
+    updateCallback: (newObject: any, newSha1: string) => void;
     #supabaseSubcription: RealtimeChannel | null;
 
     constructor(
@@ -423,13 +400,13 @@ export class Variable {
         name: string,
         object: string,
         namespace: string | null = null,
-        callbackOnChange?: (newObject: any, newSha1: string) => void
+        updateCallback?: (newObject: any, newSha1: string) => void
     ) {
         this.jsosClient = jsosClient;
         this.name = name;
         this.namespace = namespace;
         this.objectSha1 = object;
-        this.callbackOnChange = callbackOnChange;
+        this.updateCallback = updateCallback;
         this.#supabaseSubcription = null;
     }
 
@@ -489,8 +466,8 @@ export class Variable {
                     if (payload.new["namespace"] === this.namespace) {
                         this.objectSha1 = payload.new["object"];
                     }
-                    if (this.callbackOnChange) {
-                        this.callbackOnChange(this, payload.new["object"]);
+                    if (this.updateCallback) {
+                        this.updateCallback(this.get(), payload.new["object"]);
                     }
                 }
             )
@@ -515,7 +492,7 @@ export class Variable {
         name: string,
         namespace: string | null = null,
         subscribeToSupabase: boolean = true,
-        callbackOnChange?: (newVar: Variable, newObj: any) => void
+        updateCallback?: (newObject: any, newSha1: string) => void
     ): Promise<Variable> => {
         /* If this variable exists already, fetch & return it. Else create it and
          * initialize it to wrap PersistentObject(null) */
@@ -527,7 +504,7 @@ export class Variable {
                 name,
                 sha1,
                 namespace,
-                callbackOnChange
+                updateCallback
             );
         } else {
             const nullSha1 = await getSha1(await jsosClient.putObject(null));
@@ -537,7 +514,7 @@ export class Variable {
                 name,
                 nullSha1,
                 namespace,
-                callbackOnChange
+                updateCallback
             );
         }
         if (subscribeToSupabase) {
@@ -561,10 +538,8 @@ export class Variable {
         }
     };
 
-    get = async <K, V>(): Promise<PersistentCollection<K, V>> => {
-        const obj = await this.jsosClient.getPersistentCollection<K, V>(
-            this.objectSha1
-        );
+    get = async (): Promise<PersistentObject> => {
+        const obj = await this.jsosClient.getPersistentObject(this.objectSha1);
         if (!obj) {
             throw Error(
                 `Object with sha1 '${this.objectSha1}' not found in database`
@@ -573,14 +548,13 @@ export class Variable {
         return obj;
     };
 
-    set = async <K, V>(
-        newVal: Json
-    ): Promise<PersistentCollection<K, V>> => {
+    set = async (
+        newVal: JObject | PersistentObject
+    ): Promise<PersistentObject> => {
         /* TODO: We might need to use a lock to handle race conditions between
          * this function and updates done by the supbase subscription callback. */
-        if (!isPersistentCollection<K,V>(newVal)) {
-            let x = fromJS(newVal)
-            newVal = await this.jsosClient.persistentCollection<K,V>(x);
+        if (!isPersistentObject(newVal)) {
+            newVal = await this.jsosClient.persistentObject(newVal);
         }
         let queryBuilder = this.jsosClient.supabaseClient
             .from(this.jsosClient.referencesTableName)
@@ -765,53 +739,77 @@ export class PersistentOrderedMap<K, V> implements PersistentOrderedMap<K, V> {
     };
 }
 
-export class PersistentCollection<K, V> {
+export class OldPersistentOrderedMap<K, V> {
+    /*
+    A persistant ordered map that uses Jsos to stores its data in a supabase table.
+    Each value is stored into Jsos as a separate object, and the map stores the
+    sha1 of each value. The map itself is stored as an Array<Array> in Jsos, e.g:
+      [["key1", "ref:acf928ad927..."],["key2", "ref:28cf9ad297a..."], ...]
+    */
     jsosClient: JsosClient;
-    collection: Collection<K, V>;
+    map: OrderedMap<K, V>;
     sha1: string;
-    wrappedFunctions = ["set", "setIn"];
 
     private constructor(
         jsosClient: JsosClient,
-        collection: Collection<K, V>,
+        orderedMap: OrderedMap<K, V>,
         sha1: string
     ) {
         this.jsosClient = jsosClient;
-        this.collection = Collection(collection);
+        this.map = OrderedMap(orderedMap);
         this.sha1 = sha1;
-
-        return new Proxy(this, {
-            get: (target, prop, receiver) => {
-                if (Reflect.has(target, prop)) {
-                    return Reflect.get(target, prop, receiver);
-                } else if (target.wrappedFunctions.includes(prop.toString())) {
-                    return function (...args) {
-                        const method = Reflect.get(
-                            target.collection,
-                            prop,
-                            receiver
-                        ).bind(target.collection);
-                        const newMap = PersistentCollection.create<K, V>(
-                            target.jsosClient,
-                            method(...args)
-                        );
-                        return newMap;
-                    };
-                } else {
-                    return Reflect.get(target.collection, prop, receiver);
-                }
-            },
-        });
     }
 
     static create = async <K, V>(
         jsosClient: JsosClient,
-        collection: Collection<K, V>
-    ): Promise<PersistentCollection<K, V>> => {
-        const sha1 = getSha1(await jsosClient.putObject(collection));
-        return new PersistentCollection(jsosClient, collection, sha1);
+        ...args
+    ): Promise<OldPersistentOrderedMap<K, V>> => {
+        const map = OrderedMap<K, V>(...args);
+        const sha1 = getSha1(await jsosClient.putObject(map.toArray()));
+        return new OldPersistentOrderedMap(jsosClient, map, sha1);
     };
+
+    async set(key: K, value: V): Promise<OldPersistentOrderedMap<K, V>> {
+        const newMap = OldPersistentOrderedMap.create<K, V>(
+            this.jsosClient,
+            this.map.set(key, value)
+        );
+        return newMap;
+    }
+
+    async setIn(
+        keyPath: Iterable<K>,
+        value: V
+    ): Promise<OldPersistentOrderedMap<K, V>> {
+        const newMap = OldPersistentOrderedMap.create<K, V>(
+            this.jsosClient,
+            this.map.setIn(keyPath, value)
+        );
+        return newMap;
+    }
+
+    async get(key: K): Promise<V | undefined> {
+        return this.map.get(key);
+    }
+
+    async equals(other: OldPersistentOrderedMap<K, V>): Promise<boolean> {
+        // this could alternatively be: this.map.equals(other.map)
+        return this.sha1 === other.sha1;
+    }
 }
+
+/* TODO: Make a SharedOrderedMap that uses the Supabase subscription
+         feature to keep the map in sync across multiple clients.
+         SharedOrderedMap is an abstraction on top of a lineage of
+         descendent PersisententOrderedMaps; and it gets an async
+         callback when remote "updates" occur to the map, that it passes
+         on to it own subscribers, like react components. Since our
+         underlying data structure is immutable, the underlying map
+         isn't actually updated, but rather a new "child" map is created
+         and that is what is passed to the callback. The SharedOrderedMap
+         learns about the creation of new children via the supabase
+         subscription feature.
+ */
 
 const jsos = new JsosClient(supabase);
 export default jsos;
