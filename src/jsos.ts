@@ -6,6 +6,40 @@ import _ from "lodash";
 //import fs from "fs";
 
 /*
+=============================================================
+=================== JSOS - Key Abstractions =================
+=============================================================
+
+== JObject ==
+The type of objects that this library handles: including aribrarily nested 
+arrangements of any Json types or Immutable.Collections
+
+== getSha1() ==
+returns the hash of an object, which is used as address in our object
+store
+
+== putObject / getObject ==
+Low-level functions that store and retrieve JObject's from the database (and
+local cache). Immutable.Collections include List, Map, Set, OrderedMap,
+OrderedSet, Stack, and Record.
+
+== PersistentObject ==
+Immutable abstration with persistence. Wraps a JObject (i.e., primitives +
+Immutables.Collections)
+For v0: we use toJS() and fromJS() to convert between Immutable and JS objects
+        which throws means any Map and Array types are converted to Immutable.Map
+        and Immutable.List types respectively and the original mix of plain JS
+        List and Map types are lost.
+
+== Variable ==
+A shared mutable named reference to a PersistentObject. This is essentially a
+(name: string, namespace: string, sha1: string) tuple and some helper functions
+for updating & syncing that tuple with the database. As the Variable is updated,
+the reference is updated in the database.
+
+*/
+
+/*
 async function loadCache(cacheName: string) {
     // Browser
     if (typeof window !== 'undefined') {
@@ -53,7 +87,8 @@ type JObject = Json | Collection<any, any> | undefined;
 // https://github.com/glenjamin/transit-immutable-js
 const ORDERED_MAP_KEY = "~#iOM";
 const LIST_KEY = "~#iL";
-const DENORMALIZED_OBJECT_KEY = "~#N"; // This one is our own invention.
+const DENORMALIZED_OBJECT_KEY = "~#jsosdeNormalizedObject"; // This one is our own invention.
+const VARIABLE_PARENT_KEY = "~#jsosVarParent"; // This one is our own invention.
 // TODO: add Map (iM), Set (iS), OrderedSet (iO), Stack (iStk), ??? and Null (_) ???
 
 function isPlainObject(obj: any): obj is { [key: string]: any } {
@@ -68,6 +103,16 @@ function isPlainObject(obj: any): obj is { [key: string]: any } {
 function isPersistentObject(obj: any): obj is PersistentObject {
     return obj?.isPersistentObject?.();
 }
+
+function isAsyncFn<T>(fn: any): fn is (...args: any[]) => Promise<T> {
+    try {
+        const result = fn();
+        return result instanceof Promise;
+    } catch {
+        return false;
+    }
+}
+
 
 const OBJ_CACHE_FILE_PATH = "./objectCache.json";
 //let objectCache = await loadCache(OBJ_CACHE_FILE_PATH);
@@ -392,20 +437,23 @@ export class Variable {
     name: string;
     namespace: string | null;
     objectSha1: string;
+    parentSha1: string | null;
     updateCallback: (newObject: any, newSha1: string) => void;
     #supabaseSubcription: RealtimeChannel | null;
 
     constructor(
         jsosClient: JsosClient,
         name: string,
-        object: string,
+        objectSha1: string,
+        parentSha1: string | null = null,
         namespace: string | null = null,
         updateCallback?: (newObject: any, newSha1: string) => void
     ) {
         this.jsosClient = jsosClient;
         this.name = name;
         this.namespace = namespace;
-        this.objectSha1 = object;
+        this.objectSha1 = objectSha1;
+        this.parentSha1 = parentSha1;
         this.updateCallback = updateCallback;
         this.#supabaseSubcription = null;
     }
@@ -462,12 +510,12 @@ export class Variable {
                     table: this.jsosClient.referencesTableName,
                     filter: `name=eq.${this.name}`,
                 },
-                (payload) => {
+                async (payload) => {
                     if (payload.new["namespace"] === this.namespace) {
                         this.objectSha1 = payload.new["object"];
                     }
                     if (this.updateCallback) {
-                        this.updateCallback(this.get(), payload.new["object"]);
+                        this.updateCallback(await this.get(), payload.new["object"]);
                     }
                 }
             )
@@ -497,12 +545,14 @@ export class Variable {
         /* If this variable exists already, fetch & return it. Else create it and
          * initialize it to wrap PersistentObject(null) */
         const sha1 = await jsosClient.getReference(name, namespace);
+        const parentSha1 = await jsosClient.getReference(sha1, VARIABLE_PARENT_KEY) || null;
         let newVar;
         if (sha1) {
             newVar = new Variable(
                 jsosClient,
                 name,
                 sha1,
+                parentSha1,
                 namespace,
                 updateCallback
             );
@@ -513,6 +563,7 @@ export class Variable {
                 jsosClient,
                 name,
                 nullSha1,
+                parentSha1,
                 namespace,
                 updateCallback
             );
@@ -547,6 +598,17 @@ export class Variable {
         }
         return obj;
     };
+
+    getParent = async (): Promise<PersistentObject> => {
+        const obj = await this.jsosClient.getPersistentObject(this.parentSha1);
+        if (!obj) {
+            throw Error(
+                `Parent object with sha1 '${this.parentSha1}' not found in database`
+            );
+        }
+        return obj;
+    };
+
 
     set = async (
         newVal: JObject | PersistentObject
@@ -611,8 +673,13 @@ export class Variable {
         the caller can try again.
         */
         const currVal = await this.get();
+        const parentSha1 = this.objectSha1; // capture this before we change it.
         const newVal = await currVal.update(updateFn);
-        return await this.set(newVal);
+        const childSha1 = getSha1(newVal);
+        const afterSetting = await this.set(newVal);
+        await this.jsosClient.putReference(childSha1, VARIABLE_PARENT_KEY, parentSha1);
+        this.parentSha1 = parentSha1;
+        return afterSetting;
     };
 }
 
@@ -672,9 +739,20 @@ export class PersistentObject implements PersistentObjectInterface {
     }
 
     async update(
+        updateFn: (currVal: JObject) => Promise<JObject>
+    ): Promise<PersistentObject>;
+    async update(
         updateFn: (currVal: JObject) => JObject
-    ): Promise<PersistentObject> {
-        const newVal = updateFn(this.object);
+    );
+    async update(
+        updateFn: (currVal: JObject) => Promise<JObject> | JObject
+    ): Promise<PersistentObject>{
+        let newVal;
+        if (isAsyncFn(updateFn)) {
+            newVal = await updateFn(this.object);
+        } else {
+            newVal = updateFn(this.object);
+        }
         return PersistentObject.create(this.jsosClient, newVal);
     }
 }
