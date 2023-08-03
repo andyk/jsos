@@ -3,6 +3,7 @@ import { Collection, OrderedMap, List } from "immutable";
 import hash from "object-hash";
 import supabase from "./supabase";
 import _ from "lodash";
+import { get, set } from 'idb-keyval/dist/index.cjs';
 //import fs from "fs";
 
 /*
@@ -24,7 +25,7 @@ local cache). Immutable.Collections include List, Map, Set, OrderedMap,
 OrderedSet, Stack, and Record.
 
 == PersistentObject ==
-Immutable abstration with persistence. Wraps a JObject (i.e., primitives +
+Immutable abstration with persistence. Wraps a JObject (i.e., primitives and/or
 Immutables.Collections)
 For v0: we use toJS() and fromJS() to convert between Immutable and JS objects
         which throws means any Map and Array types are converted to Immutable.Map
@@ -39,50 +40,12 @@ the reference is updated in the database.
 
 */
 
-/*
-async function loadCache(cacheName: string) {
-    // Browser
-    if (typeof window !== 'undefined') {
-      return new Promise((resolve, reject) => {
-        const openDBRequest = indexedDB.open(cacheName);
-  
-        openDBRequest.onerror = function(event) {
-          console.error("Error opening IndexedDB:", event);
-          reject((event.target as IDBOpenDBRequest).error);
-        };
-  
-        openDBRequest.onsuccess = function(event) {
-          const db = (event.target as IDBOpenDBRequest).result;
-          const transaction = db.transaction(cacheName);
-          const objectStore = transaction.objectStore(cacheName);
-          const getRequest = objectStore.get(cacheName);
-  
-          getRequest.onerror = function(event) {
-            console.error("Error getting data from IndexedDB:", event);
-            reject((event.target as IDBRequest).error);
-          };
-  
-          getRequest.onsuccess = function(event) {
-            resolve((event.target as IDBRequest).result || {});
-          };
-        };
-      });
-    } else {
-      // Node.js
-      const fs = require('fs');
-      if (fs.existsSync(cacheName)) {
-        const cacheData = fs.readFileSync(cacheName, "utf8");
-        return JSON.parse(cacheData);
-      } else {
-        return {};
-      }
-    }
-  }
- */ 
-
 type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
 type JObject = Json | Collection<any, any> | undefined;
 
+
+const OBJ_CACHE_FILE_PATH = "./objectCache.json";
+const REF_CACHE_FILE_PATH = "./referenceCache.json";
 // Re-using seriealization special keys from
 // https://github.com/glenjamin/transit-immutable-js
 const ORDERED_MAP_KEY = "~#iOM";
@@ -113,10 +76,48 @@ function isAsyncFn<T>(fn: any): fn is (...args: any[]) => Promise<T> {
     }
 }
 
+async function loadCache(cacheName: string, cacheObject: { [key: string]: any }) {
+    // Browser
+    if (typeof window !== "undefined") {
+        return new Promise((resolve, reject) => {
+            const openDBRequest = indexedDB.open(cacheName);
 
-const OBJ_CACHE_FILE_PATH = "./objectCache.json";
-//let objectCache = await loadCache(OBJ_CACHE_FILE_PATH);
-let objectCache: { [key: string]: Json } = {};
+            openDBRequest.onerror = function (event) {
+                console.error("Error opening IndexedDB:", event);
+                reject((event.target as IDBOpenDBRequest).error);
+            };
+
+            openDBRequest.onsuccess = function (event) {
+                const db = (event.target as IDBOpenDBRequest).result;
+                const transaction = db.transaction(cacheName);
+                const objectStore = transaction.objectStore(cacheName);
+                const getRequest = objectStore.get(cacheName);
+
+                getRequest.onerror = function (event) {
+                    console.error("Error getting data from IndexedDB:", event);
+                    reject((event.target as IDBRequest).error);
+                };
+
+                getRequest.onsuccess = function (event) {
+                    const result = (event.target as IDBRequest).result || {};
+                    Object.assign(cacheObject, result);
+                    resolve(cacheObject);
+                };
+            };
+        });
+    } else {
+        // Node.js
+        const fs = require("fs");
+        if (fs.existsSync(cacheName)) {
+            const cacheData = fs.readFileSync(cacheName, "utf8");
+            const result = JSON.parse(cacheData);
+            Object.assign(cacheObject, result);
+            return cacheObject;
+        } else {
+            return cacheObject;
+        }
+    }
+}
 
 export function getSha1(o: any): string {
     if (o && typeof o.sha1 === "string") {
@@ -124,17 +125,28 @@ export function getSha1(o: any): string {
     }
     return hash(o, { algorithm: "sha1", encoding: "hex" });
 }
+/*
+let objectCache: { [key: string]: Json } = {};
 
-export function cacheObject(object: Json): [Json, string] | [undefined, undefined] {
+(async () => {
+    await loadCache(OBJ_CACHE_FILE_PATH, objectCache);
+})();
+
+export function cacheObject(
+    object: Json
+): [Json, string] | [undefined, undefined] {
     const sha1 = getSha1(object);
     objectCache[sha1] = object;
     //fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
     return [object, sha1];
 }
+*/
 
-const REF_CACHE_FILE_PATH = "./referenceCache.json";
-//let referenceCache = loadCache(REF_CACHE_FILE_PATH);
-let referenceCache: { [key: string]: any} = {}
+/*
+let referenceCache: { [key: string]: Json } = {};
+(async () => {
+    await loadCache(REF_CACHE_FILE_PATH, referenceCache);
+})();
 
 export function cacheReference(
     name: string,
@@ -152,26 +164,87 @@ export function getCachedReference(
 ): string | undefined {
     return referenceCache[name + "-" + namespace];
 }
+*/
+
+export class Cache {
+    // An in-memory cache backed by IndexedDB (in browser) or local file (in node.js).
+    // At creation, load from persistent storage is done lazily.
+    private cache: { [key: string]: any } = {};
+    private cacheName: string;
+
+    constructor(cacheName: string) {
+        this.cacheName = cacheName;
+        this.load(cacheName);
+    }
+
+    private async load(cacheName: string) {
+        if (typeof window !== "undefined") {
+            // In browser
+            this.cache = await get(cacheName) || {};
+        } else {
+            // In Node.js
+            const fs = require("fs");
+            if (fs.existsSync(cacheName)) {
+                const cacheData = fs.readFileSync(cacheName, "utf8");
+                const result = JSON.parse(cacheData);
+                Object.assign(this.cache, result);
+            }
+        }
+    }
+
+    has(key: string) {
+        return key in this.cache;
+    }
+
+    get(key: string) {
+        return this.cache[key];
+    }
+
+    async put(key: string, value: any) {
+        this.cache[key] = value;
+
+        if (typeof window !== "undefined") {
+            // In browser
+            await set(key, value);
+        } else {
+            // In Node.js
+            const fs = require("fs");
+            fs.writeFileSync(this.cacheName, JSON.stringify(this.cache));
+        }
+    }
+
+    async putReference(name: string, namespace: string, targetSha1: string) {
+        await this.put(name + "-" + namespace, targetSha1);
+    }
+
+    getReference(name: string, namespace: string) {
+        return this.get(name + "-" + namespace);
+    }
+}
 
 export class JsosClient {
     supabaseClient: SupabaseClient;
     objectsTableName: string;
     referencesTableName: string;
+    objectCache: Cache;
+    referenceCache: Cache;
 
     constructor(
         supabaseClient: SupabaseClient,
         objectsTableName: string = "jsos_objects",
-        referencesTableName: string = "jsos_refs"
+        referencesTableName: string = "jsos_refs",
     ) {
         this.supabaseClient = supabaseClient;
         this.objectsTableName = objectsTableName;
         this.referencesTableName = referencesTableName;
+        this.objectCache = new Cache(OBJ_CACHE_FILE_PATH);
+        this.referenceCache = new Cache(REF_CACHE_FILE_PATH);
     }
 
     async writeObjectToDatabase(object: Json): Promise<[Json, string]> {
         const sha1 = getSha1(object);
-        if (sha1 in objectCache) {
-            return [objectCache[sha1], sha1];
+        if (this.objectCache.has(sha1)) {
+            return [this.objectCache.get(sha1), sha1];
         }
         const { data: row, error } = await this.supabaseClient
             .from(this.objectsTableName)
@@ -192,7 +265,8 @@ export class JsosClient {
                     throw error;
                 }
                 if (row) {
-                    return cacheObject(row.json);
+                    this.objectCache.put(sha1, row.json)
+                    return [row.json, sha1];
                 }
                 throw new Error(
                     `Object with sha1 ${sha1} already in database but could not be fetched.`
@@ -201,7 +275,8 @@ export class JsosClient {
             throw error;
         }
         if (row) {
-            return cacheObject(row.json);
+            this.objectCache.put(sha1, row.json)
+            return [row.json, sha1];
         }
         throw new Error(
             `Object ${sha1} was inserted but not successfully returned.`
@@ -214,7 +289,7 @@ export class JsosClient {
         useCache: boolean = true
     ): Promise<JObject> {
         let json;
-        const cachedDenormalizedRef = getCachedReference(
+        const cachedDenormalizedRef = this.referenceCache.getReference(
             sha1,
             DENORMALIZED_OBJECT_KEY
         );
@@ -224,8 +299,8 @@ export class JsosClient {
             json = this.getObject(cachedDenormalizedRef, false, useCache);
             foundDenormalizedRef = true;
             // Else, see if the normalized object is cached.
-        } else if (useCache && sha1 in objectCache) {
-            json = objectCache[sha1];
+        } else if (useCache && this.objectCache.has(sha1)) {
+            json = this.objectCache.get(sha1);
         } else {
             const { data: row, error } = await this.supabaseClient
                 .from(this.objectsTableName)
@@ -333,9 +408,10 @@ export class JsosClient {
         );
 
         // Locally cache denormalized Object
-        let denormalizedSha1 = cacheObject(object)[1];
+        let denormalizedSha1 = getSha1(object);
         if (denormalizedSha1 !== sha1) {
-            cacheReference(sha1, DENORMALIZED_OBJECT_KEY, denormalizedSha1);
+            this.objectCache.put(denormalizedSha1, object);
+            this.referenceCache.putReference(sha1, DENORMALIZED_OBJECT_KEY, denormalizedSha1);
         }
         return writtenNormalized;
     }
@@ -374,13 +450,30 @@ export class JsosClient {
             .select("object")
             .maybeSingle();
         if (error) {
-            throw error;
+            if (error.code === "23505") {
+                // Reference with name this name and namespace already exists in database.
+                const { data: row, error } = await this.supabaseClient
+                    .from(this.referencesTableName)
+                    .select("object")
+                    .eq("name", name)
+                    .eq("namespace", namespace)
+                    .maybeSingle();
+                if (error) {
+                    throw error;
+                }
+                if (row && row.object === sha1) {
+                    return true;
+                }
+                throw new Error(
+                    `Object with sha1 ${sha1} already in database but could not be fetched.`
+                );
+            }
         }
         if (row) {
             return true;
         }
         if (useCache) {
-            cacheReference(name, namespace, sha1);
+            this.referenceCache.put(name + namespace, sha1);
         }
     };
 
@@ -515,7 +608,10 @@ export class Variable {
                         this.objectSha1 = payload.new["object"];
                     }
                     if (this.updateCallback) {
-                        this.updateCallback(await this.get(), payload.new["object"]);
+                        this.updateCallback(
+                            await this.get(),
+                            payload.new["object"]
+                        );
                     }
                 }
             )
@@ -545,7 +641,8 @@ export class Variable {
         /* If this variable exists already, fetch & return it. Else create it and
          * initialize it to wrap PersistentObject(null) */
         const sha1 = await jsosClient.getReference(name, namespace);
-        const parentSha1 = await jsosClient.getReference(sha1, VARIABLE_PARENT_KEY) || null;
+        const parentSha1 =
+            (await jsosClient.getReference(sha1, VARIABLE_PARENT_KEY)) || null;
         let newVar;
         if (sha1) {
             newVar = new Variable(
@@ -563,7 +660,7 @@ export class Variable {
                 jsosClient,
                 name,
                 nullSha1,
-                parentSha1,
+                null,
                 namespace,
                 updateCallback
             );
@@ -608,7 +705,6 @@ export class Variable {
         }
         return obj;
     };
-
 
     set = async (
         newVal: JObject | PersistentObject
@@ -677,7 +773,11 @@ export class Variable {
         const newVal = await currVal.update(updateFn);
         const childSha1 = getSha1(newVal);
         const afterSetting = await this.set(newVal);
-        await this.jsosClient.putReference(childSha1, VARIABLE_PARENT_KEY, parentSha1);
+        await this.jsosClient.putReference(
+            childSha1,
+            VARIABLE_PARENT_KEY,
+            parentSha1
+        );
         this.parentSha1 = parentSha1;
         return afterSetting;
     };
@@ -741,12 +841,10 @@ export class PersistentObject implements PersistentObjectInterface {
     async update(
         updateFn: (currVal: JObject) => Promise<JObject>
     ): Promise<PersistentObject>;
-    async update(
-        updateFn: (currVal: JObject) => JObject
-    );
+    async update(updateFn: (currVal: JObject) => JObject);
     async update(
         updateFn: (currVal: JObject) => Promise<JObject> | JObject
-    ): Promise<PersistentObject>{
+    ): Promise<PersistentObject> {
         let newVal;
         if (isAsyncFn(updateFn)) {
             newVal = await updateFn(this.object);

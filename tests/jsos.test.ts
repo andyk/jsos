@@ -1,6 +1,9 @@
-import jsos, { getSha1 } from "../src/jsos";
+import jsos, { getSha1, Cache } from "../src/jsos";
 import { OrderedMap } from "immutable";
+import tmp from 'tmp';
 import _ from "lodash";
+
+tmp.setGracefulCleanup();
 
 function assert(condition, message) {
     if (!condition) {
@@ -110,7 +113,16 @@ test('Testing nested PersistentOrderedMap', async () => {
     assert(gotNested?.get("agent1")?.toArray()[0][0] === "Goal", "nested orderedMap getting a set value failed");
 }, 60000);
 
-test('Testing Variable', async () => {
+test('Testing Cache', async () => {
+    const tmpDir = tmp.dirSync(({} as tmp.Options));
+    const testCache = new Cache(tmpDir.name + "/testCache");
+    const testKey = "testKey";
+    const testObj = {a: "aa", b: "bb"};
+    testCache.put(testKey, testObj); 
+    assert(_.isEqual(testCache.get(testKey), testObj), "Cache put and get were not inverses");
+ });
+
+test('Testing Variable operations', async () => {
     //http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
     const randStr = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15); 
     const variable = await jsos.variable(randStr);
@@ -135,4 +147,4 @@ test('Testing Variable', async () => {
         await sleep(300);
     }
     await delayedFunction();
-}, 100000);
+}, 10000);
