@@ -3,8 +3,12 @@ import { Collection, OrderedMap, List } from "immutable";
 import hash from "object-hash";
 import supabase from "./supabase";
 import _ from "lodash";
-import { get, set } from 'idb-keyval/dist/index.cjs';
-//import fs from "fs";
+import { createStore, set, entries} from 'idb-keyval/dist/index.cjs';
+
+// WARNING: probably want be very careful what we use the referenceCache for
+// since references are shared and mutable so cached values of them
+// are likely to be come stale & incorrect. We may want to get rid of the
+// referenceCache entirely.
 
 /*
 =============================================================
@@ -37,7 +41,6 @@ A shared mutable named reference to a PersistentObject. This is essentially a
 (name: string, namespace: string, sha1: string) tuple and some helper functions
 for updating & syncing that tuple with the database. As the Variable is updated,
 the reference is updated in the database.
-
 */
 
 type Json = string | number | boolean | null | { [key: string]: Json } | Json[];
@@ -76,111 +79,37 @@ function isAsyncFn<T>(fn: any): fn is (...args: any[]) => Promise<T> {
     }
 }
 
-async function loadCache(cacheName: string, cacheObject: { [key: string]: any }) {
-    // Browser
-    if (typeof window !== "undefined") {
-        return new Promise((resolve, reject) => {
-            const openDBRequest = indexedDB.open(cacheName);
-
-            openDBRequest.onerror = function (event) {
-                console.error("Error opening IndexedDB:", event);
-                reject((event.target as IDBOpenDBRequest).error);
-            };
-
-            openDBRequest.onsuccess = function (event) {
-                const db = (event.target as IDBOpenDBRequest).result;
-                const transaction = db.transaction(cacheName);
-                const objectStore = transaction.objectStore(cacheName);
-                const getRequest = objectStore.get(cacheName);
-
-                getRequest.onerror = function (event) {
-                    console.error("Error getting data from IndexedDB:", event);
-                    reject((event.target as IDBRequest).error);
-                };
-
-                getRequest.onsuccess = function (event) {
-                    const result = (event.target as IDBRequest).result || {};
-                    Object.assign(cacheObject, result);
-                    resolve(cacheObject);
-                };
-            };
-        });
-    } else {
-        // Node.js
-        const fs = require("fs");
-        if (fs.existsSync(cacheName)) {
-            const cacheData = fs.readFileSync(cacheName, "utf8");
-            const result = JSON.parse(cacheData);
-            Object.assign(cacheObject, result);
-            return cacheObject;
-        } else {
-            return cacheObject;
-        }
-    }
-}
-
 export function getSha1(o: any): string {
     if (o && typeof o.sha1 === "string") {
         return o.sha1;
     }
     return hash(o, { algorithm: "sha1", encoding: "hex" });
 }
-/*
-let objectCache: { [key: string]: Json } = {};
-
-(async () => {
-    await loadCache(OBJ_CACHE_FILE_PATH, objectCache);
-})();
-
-export function cacheObject(
-    object: Json
-): [Json, string] | [undefined, undefined] {
-    const sha1 = getSha1(object);
-    objectCache[sha1] = object;
-    //fs.writeFileSync(OBJ_CACHE_FILE_PATH, JSON.stringify(objectCache));
-    return [object, sha1];
-}
-*/
-
-/*
-let referenceCache: { [key: string]: Json } = {};
-(async () => {
-    await loadCache(REF_CACHE_FILE_PATH, referenceCache);
-})();
-
-export function cacheReference(
-    name: string,
-    namespace: string,
-    sha1: string
-): boolean {
-    referenceCache[name + "-" + namespace] = sha1;
-    //fs.writeFileSync(REF_CACHE_FILE_PATH, JSON.stringify(referenceCache));
-    return true;
-}
-
-export function getCachedReference(
-    name: string,
-    namespace: string
-): string | undefined {
-    return referenceCache[name + "-" + namespace];
-}
-*/
 
 export class Cache {
     // An in-memory cache backed by IndexedDB (in browser) or local file (in node.js).
     // At creation, load from persistent storage is done lazily.
+    static INDEXDB_STORE_NAME: string = "jsosCache";
     private cache: { [key: string]: any } = {};
     private cacheName: string;
+    private indexDBStore: ReturnType<typeof createStore> | null;
 
     constructor(cacheName: string) {
         this.cacheName = cacheName;
+        this.indexDBStore = null;
         this.load(cacheName);
     }
 
     private async load(cacheName: string) {
         if (typeof window !== "undefined") {
             // In browser
-            this.cache = await get(cacheName) || {};
+            console.log("trying to create indexDBStore", cacheName)
+            this.indexDBStore = createStore(cacheName, Cache.INDEXDB_STORE_NAME);
+            if (!this.indexDBStore) {
+                throw new Error("indexDBStore is null but should not be.");
+            }
+            const indexDBEntries = await entries(this.indexDBStore);
+            this.cache = Object.fromEntries(indexDBEntries);
         } else {
             // In Node.js
             const fs = require("fs");
@@ -200,16 +129,26 @@ export class Cache {
         return this.cache[key];
     }
 
-    async put(key: string, value: any) {
+    put(key: string, value: any) {
+        /* Write to memory & asynchronously persist to IndexDB or FS. */
         this.cache[key] = value;
 
         if (typeof window !== "undefined") {
             // In browser
-            await set(key, value);
+            try {
+                set(key, value, this.indexDBStore);
+            } catch (e) {
+                console.error("Catching Error writing to indexedDB: ", e);
+            }
+            console.log("wrote to indexedDB: ", key, value);
         } else {
             // In Node.js
             const fs = require("fs");
-            fs.writeFileSync(this.cacheName, JSON.stringify(this.cache));
+            fs.writeFile(this.cacheName, JSON.stringify(this.cache), (err) => {
+                if (err) {
+                    console.error("Error writing to file: ", err);
+                }
+            });
         }
     }
 
@@ -244,8 +183,10 @@ export class JsosClient {
     async writeObjectToDatabase(object: Json): Promise<[Json, string]> {
         const sha1 = getSha1(object);
         if (this.objectCache.has(sha1)) {
+            console.log("cache hit: ", sha1)
             return [this.objectCache.get(sha1), sha1];
         }
+        console.log("cache miss: ", sha1);
         const { data: row, error } = await this.supabaseClient
             .from(this.objectsTableName)
             .insert({ sha1: sha1, json: object })
