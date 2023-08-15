@@ -43,7 +43,7 @@ tsconfig.json.
 */
 {
     "compilerOptions": {
-      //"strict": true,
+      "strict": true,
       "target": "es2022", // "es2018",                                  /* Set the JavaScript language version for emitted JavaScript and include compatible library declarations. */
       "module": "CommonJS", // "es2022",                                /* Specify what module code is generated. */
       "moduleResolution": "nodenext",

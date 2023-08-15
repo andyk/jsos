@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
-import jsos, { Variable, PersistentObject } from './jsos';
+import jsos, { Variable, Value } from './jsos';
 
-export const DataContext = React.createContext<Array<PersistentObject|Function|null>>([]);
+export const DataContext = React.createContext<Array<Value|Function|null>>([]);
 
-export default function JsosContextProvider({ children }) {
+export default function JsosContextProvider({ children, name, namespace }) {
     const [jsosVar, setJsosVar] = React.useState<null | Variable >(null);
-    const [appData, setAppData] = React.useState<{[key: string]: null | PersistentObject}>({ pObject: null });
+    const [appData, setAppData] = React.useState<{[key: string]: null | Value}>({ pObject: null });
 
     function varChanged(newObj, newSha1) {
         console.log("varChanged triggered: ", newObj, newSha1)

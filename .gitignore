@@ -1,4 +1,4 @@
 node_modules
 
-objectCache.json
-referenceCache.json
+JsosVariableStore.json
+JsosObjectStore.json
