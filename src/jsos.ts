@@ -77,10 +77,19 @@ for updating & syncing that tuple with the database. As the Variable is updated,
 the reference is updated in the database.
 */
 
-type Primative = string | number | boolean | null;
-type NormalizedJson = string | number | boolean | null | { [key: string]: Primative } | Primative[];
-type Json = Primative | { [key: string]: Json } | Json[];
-type EncodedNormalized = [string, { objectSha256: string; manifest: Array<string> }];
+type Primitive = string | number | boolean | null;
+type NormalizedJson =
+    | string
+    | number
+    | boolean
+    | null
+    | { [key: string]: Primitive }
+    | Primitive[];
+type Json = Primitive | { [key: string]: Json } | Json[];
+type EncodedNormalized = [
+    string,
+    { objectSha256: string; manifest: Array<string> }
+];
 type VariableUpdateCallback = (
     name: string,
     namespace: string | null,
@@ -115,12 +124,44 @@ const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
 
-function isPlainObject(obj: any): obj is { [key: string]: any } {
+function isPrimitive(value: any): value is Primitive {
     return (
-        typeof obj === "object" &&
-        obj !== null &&
-        !Array.isArray(obj) &&
-        Object.prototype.toString.call(obj) === "[object Object]"
+        typeof value === "string" ||
+        typeof value === "number" ||
+        typeof value === "boolean" ||
+        value === null
+    );
+}
+
+function isPrimitiveArray(value: any): value is Primitive[] {
+    return Array.isArray(value) && value.every(isPrimitive);
+}
+
+function isNormalizedJsonObject(
+    value: any
+): value is { [key: string]: Primitive } {
+    if (typeof value !== "object" || value === null || Array.isArray(value))
+        return false;
+
+    return Object.values(value).every(isPrimitive);
+}
+
+function isNormalizedJson(value: any): value is NormalizedJson {
+    return (
+        isPrimitive(value) ||
+        isPrimitiveArray(value) ||
+        isNormalizedJsonObject(value)
+    );
+}
+
+function isEncodedNormalized(obj: any): obj is EncodedNormalized {
+    return (
+        Array.isArray(obj) &&
+        obj.length === 2 &&
+        obj[0] === NORMALIZED_OBJECT_KEY &&
+        typeof obj[1] === "object" &&
+        typeof obj[1].objectSha256 === "string" &&
+        Array.isArray(obj[1].manifest)
     );
 }
 
@@ -134,18 +175,21 @@ function isCustomStorageEvent(
     );
 }
 
-function isEncodedNormalized(obj: any): obj is EncodedNormalized {
-    return Array.isArray(obj) &&
-        obj.length !== 2 &&
-        obj[0] === NORMALIZED_OBJECT_KEY &&
-        typeof obj[1] === "object" &&
-        typeof obj[1].objectSha256 === "string" &&
-        Array.isArray(obj[1].manifest)
-}
-
 // TODO: cache sha256's in memory using object identity as key
 export function getSha256(o: any): string {
     return hash(o, { algorithm: "sha256", encoding: "hex" });
+}
+
+function _isValRef(obj: any) {
+    return obj && typeof obj === "string" && obj.startsWith(VALUE_REF_PREFIX);
+}
+
+function _toValRef(obj: any): string {
+    return `${VALUE_REF_PREFIX}${getSha256(obj)}`;
+}
+
+function _sha265FromValRef(ref: string): string {
+    return ref.slice(VALUE_REF_PREFIX.length);
 }
 
 function _toVarKey(name: string, namespace: string | null) {
@@ -294,12 +338,12 @@ class MultiObjectStore extends ObjectStore {
  * for encoding objects in a way that is more efficient or performant (e.g.,
  * normalizing objects prevents lots of redundant information from being sent
  * over the network).
- * 
+ *
  * The core functions are:
  *   encode(any): Json  // encodes supported non-JSON types, unsupported types dropped on a per-object-property basis, but an object is always put
  *   decode(Json): any
  *   normalize(Json): Array<NormalizedJson>  // breaks 1 object into >=1, returns outer-most object last
- *   denormalize(Array<NormalizedJson>): Promise<Json> // sub-objects must have been fetched already
+ *   denormalize(Array<[string, NormalizedJson]>): Promise<Json> // sub-objects must have been fetched already
  *   getValue(sha256: string): Promise<any>
  *   putValue(any): Promise<[string, EncodedNormalized]> // wraps normalizeDecodeAndPutValue() and returns just the outermost encoded normalized object and sha256 of it
  *   normalizeDecodePutValue(any): Promise<Array<[string, Json]>>  // returns list of key/values put, outer-most object last. `putValue()` wraps this.
@@ -356,8 +400,12 @@ export class ValueStore {
     //   }>
     async putValue(object: any): Promise<[string, EncodedNormalized]> {
         const putNormalized = await this.normalizeEncodePutValue(object);
-        const encodedAsNormalized = this.encodeNormalized(putNormalized.map((pair) => pair[0]));
-        const encodedAsNormalizedSha256 = await this.objectStore.putJson(encodedAsNormalized);
+        const encodedAsNormalized = this.encodeNormalized(
+            putNormalized.map((pair) => pair[0])
+        );
+        const encodedAsNormalizedSha256 = await this.objectStore.putJson(
+            encodedAsNormalized
+        );
         if (putNormalized.length === 0) {
             throw new Error(
                 "normalizeEncodePutValue() returned 0 objects but should have returned >0."
@@ -367,7 +415,9 @@ export class ValueStore {
     }
 
     // Outer-most normalized object is last in the returned array.
-    async normalizeEncodePutValue(object: any): Promise<Array<[string, NormalizedJson]>> {
+    async normalizeEncodePutValue(
+        object: any
+    ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
         const normalized = this.normalize(encoded);
         const manifest = await this.objectStore.putJsons(normalized);
@@ -388,20 +438,22 @@ export class ValueStore {
     // TODO: combine all parallel underlying calls to putJsons() into a single
     // call to putJsons() to improve performance via batching of any potential
     // underlying network calls.
-    async putValues(
-        objects: Array<any>
-    ): Promise<Array<[string, Json]>> {
+    async putValues(objects: Array<any>): Promise<Array<[string, Json]>> {
         return await Promise.all(
             objects.map(async (object) => await this.putValue(object))
         );
     }
 
+    // Throws an error if the object is not encoded and normalized.  If you
+    // fetch an object regardless of its type, use ObjectStore.getJson()
     async getValue(sha256: string): Promise<any> {
         const encodedNormalized = await this.objectStore.getJson(sha256);
-        if (!encodedNormalized) {
-            return;
+        if (!isEncodedNormalized(encodedNormalized)) {
+            throw new Error(
+                `Expected object to be encoded as normalized but it was not: ${encodedNormalized}`
+            );
         }
-        const normalized = this.decodeNormalized(encodedNormalized);
+        const normalized = await this.decodeNormalized(encodedNormalized);
         const denormalized = await this.denormalize(normalized);
         return this.decode(denormalized);
     }
@@ -441,27 +493,53 @@ export class ValueStore {
     }
 
     encode(object: any): Json {
-        return this.recursiveEncode(object);
+        return this.recursiveEncode(object, new Set());
     }
 
     decode(object: Json): any {
         return this.recursiveDecode(object);
     }
 
-    private recursiveEncode(object: any): any {
+    // TODO: track objects we've encoded to be sure we don't get stuck in
+    // infinite loop when objects have reference loops.
+    private recursiveEncode(object: any, visited: Set<any>): any {
         let encoded = this.shallowEncode(object);
-        for (let k in encoded) {
-            encoded[k] = this.recursiveEncode(encoded[k]);
+        if (encoded !== null && typeof encoded === "object") {
+            for (let k in encoded) {
+                if (!visited.has(object)) {
+                    visited.add(object);
+                    encoded[k] = this.recursiveEncode(encoded[k], visited);
+                }
+            }
         }
         return encoded;
     }
 
     private recursiveDecode(object: any): any {
-        TODO FIX ME
-        for (let k in object) {
-            return this.shallowDecode(this.recursiveDecode(k));
+        let decodedObj;
+        if (object && typeof object === "object") {
+            if (Array.isArray(object)) {
+                decodedObj = [...object];
+            } else {
+                decodedObj = { ...object };
+            }
+        } else {
+            if (!isPrimitive(object)) {
+                throw Error(
+                    "recursiveDecode can only handle things with typeof " +
+                        "object, string, number, boolean, or null"
+                );
+            }
+            decodedObj = object;
         }
-        return this.shallowDecode(object);
+        if (object !== null && typeof object === "object") {
+            for (let k in object) {
+                decodedObj[k] = this.shallowDecode(
+                    this.recursiveDecode(object[k])
+                );
+            }
+        }
+       return this.shallowDecode(decodedObj);
     }
 
     // This function performs shallow encoding of objects,
@@ -553,7 +631,7 @@ export class ValueStore {
     // the sha256 of the *normalized sub-object*.  Note that the normalization
     // process is recursive and will break down any object into a DAG of objects
     // where each post-noralized object is uniquely identified by its sha256
-    // hash.  
+    // hash.
     //   - in the case of a primitive or empty object, simply return the input
     //   - in the case of a non-empty object or array, return >1 flat-object/flat-array/primitive
     //
@@ -564,10 +642,8 @@ export class ValueStore {
     //
     // The last element of the return value is the outermost one, i.e. the root
     // of the DAG.
-    normalize(
-        object: Json,
-    ): Array<NormalizedJson> {
-        const objAccumulator: Array<NormalizedJson> = []; 
+    normalize(object: Json): Array<NormalizedJson> {
+        const objAccumulator: Array<NormalizedJson> = [];
         this.recursiveNormalize(object, objAccumulator);
         return objAccumulator;
     }
@@ -576,17 +652,21 @@ export class ValueStore {
         object: Json,
         objAccumulator: Array<NormalizedJson>
     ): NormalizedJson {
-        let normalizedJson: NormalizedJson = {};
+        let normalizedJson: NormalizedJson;
         if (object && typeof object === "object") {
+            if (Array.isArray(object)) {
+                normalizedJson = [];
+            } else {
+                normalizedJson = {};
+            }
             for (let k in object) {
-                if (typeof (object as any)[k] === "object") {
-                    normalizedJson[k] = `${VALUE_REF_PREFIX}${getSha256(
-                        this.recursiveNormalize((object as any)[k], objAccumulator)
-                    )}`;
-                } else {
-                    normalizedJson[k] = (object as any)[k];
-                }
-
+                //if (typeof (object as any)[k] === "object") {
+                (normalizedJson as any)[k] = _toValRef(
+                    this.recursiveNormalize((object as any)[k], objAccumulator)
+                );
+                //} else {
+                //    (normalizedJson as any)[k] = (object as any)[k];
+                //}
             }
         } else {
             normalizedJson = object;
@@ -595,46 +675,51 @@ export class ValueStore {
         return normalizedJson;
     }
 
-    // Reconstructs 1 potentially nested object (or primative) out of >=1 flat
-    // objects (or primatives). This function does not fetch any objects from
-    // the ObjectStore, all sub-objects (of type NormalizedJson) necessary to
-    // successfully denormalize must be proided in the input Array.
-    async denormalize(object: Array<NormalizedJson>): Promise<Json> {
-        let denormalized: any;
-        // In case of non-primative, use a copy of the json object so we don't mutate the object passed in.
-        if (object && typeof object === "object") {
-            if (Array.isArray(object)) {
-                denormalized = [...object];
-            } else {
-                denormalized = { ...object };
-            }
-        } else {
-            denormalized = object;
+    // Reconstructs exactly 1 potentially nested object (or primitive) out of
+    // >=1 flat object(s) or primitive(s). This function does not fetch any
+    // objects from the ObjectStore, all sub-objects (of type NormalizedJson)
+    // necessary to successfully denormalize must be proided in the input Array.
+    // Assumes that the root of the DAG is the last element of the input Array.
+    denormalize(objects: Array<[string, NormalizedJson]>): Promise<Json> {
+        const root = objects[objects.length - 1];
+        const rootObj = root[1];
+        const lookupMap = new Map(objects);
+        return this.recursiveDenormalize(rootObj, lookupMap);
+    }
+
+    recursiveDenormalize(
+        rootObj: NormalizedJson,
+        lookupMap: Map<string, NormalizedJson>
+    ) {
+        let denormalized: any; // any instead of Json here because of property access via string index (even on arrays) below
+        if (isPrimitive(rootObj)) {
+            return rootObj;
         }
-        if (
-            object &&
-            typeof object === "object" &&
-            denormalized &&
-            typeof denormalized === "object"
-        ) {
-            for (let k in object) {
-                if (
-                    object[k] &&
-                    typeof object[k] === "string" &&
-                    object[k].startsWith(VALUE_REF_PREFIX)
-                ) {
-                    denormalized[k] = await this.denormalize(
-                        object[k].slice(4)
+        if (isPrimitiveArray(rootObj)) {
+            denormalized = [...rootObj];
+        } else {
+            denormalized = { ...rootObj };
+        }
+        for (let k in denormalized) {
+            if (_isValRef(denormalized[k])) {
+                const key = _sha265FromValRef(denormalized[k]);
+                const subObj = lookupMap.get(key);
+                if (subObj === undefined) {
+                    throw Error(
+                        `recursiveDenormalize() failed to find object with sha256 ${key}. ` +
+                            `All of the transitive dependencies must be provided to this function.`
                     );
-                } else {
-                    denormalized[k] = object[k];
                 }
+                denormalized[k] = this.recursiveDenormalize(subObj, lookupMap);
             }
         }
         return denormalized;
     }
 
-    // Assumes that the last element of the array is the sha256 of the root of the DAG.
+    // Assumes that the last element of the input array is the sha256 of the root of the DAG.
+    // Also assumes (but does not check or enforce) that all objects with addresses provided
+    // in the input array are normalized.
+    //
     // NOTE: the sha256 of the root object/value is included in the manifest and
     // also returned as the `objectSha256` property for convenience.
     encodeNormalized(normalizedSha256s: Array<string>): EncodedNormalized {
@@ -647,21 +732,35 @@ export class ValueStore {
         ];
     }
 
-    async decodeNormalized(obj: EncodedNormalized): Promise<Array<Json>> {
+    // Decodes an EncodedNormalized object (or primitive) into an array of NormalizedJson objects.
+    // Assumes that the last element of the input array is the sha256 of the root of the DAG.
+    async decodeNormalized(
+        obj: EncodedNormalized
+    ): Promise<Array<[string, NormalizedJson]>> {
         if (!isEncodedNormalized(obj)) {
-            throw Error("Not an encoded normalized object: " + JSON.stringify(obj));
+            throw Error(
+                "Not an encoded normalized object: " + JSON.stringify(obj)
+            );
         }
         const manifest = obj[1].manifest;
         const gotJsons = await this.objectStore.getJsons(manifest);
-        const successfulFetches: Json[] = gotJsons.filter((json): json is Json => json !== undefined);
+        const successfulFetches = gotJsons.filter(
+            (json): json is NormalizedJson => isNormalizedJson(json)
+        );
         if (successfulFetches.length !== manifest.length) {
-            const failedSha256s = manifest.filter((_, index) => gotJsons[index] === undefined);
+            const failedSha256s = manifest.filter(
+                (_, index) => gotJsons[index] === undefined
+            );
             throw Error(
                 "Did not successfully get all normalized objects in manifest " +
-                "from ObjectStore. Failed to get the following sha256s: " + failedSha256s
+                    "from ObjectStore. Failed to get the following sha256s: " +
+                    failedSha256s
             );
         }
-        return successfulFetches;
+        const withKeys: Array<[string, NormalizedJson]> = successfulFetches.map(
+            (obj, i) => [manifest[i], obj]
+        );
+        return withKeys;
     }
 }
 
@@ -839,10 +938,10 @@ export class InMemoryObjectStore extends ObjectStore {
         return this.valueMap.get(sha256);
     }
 
-    async putJson(object: any): Promise<any> {
+    async putJson(object: any): Promise<string> {
         const sha256 = getSha256(object);
         this.valueMap.set(sha256, object);
-        return { sha256, value: object };
+        return sha256;
     }
 
     async deleteJson(sha256: string): Promise<void> {
@@ -1380,7 +1479,7 @@ export class Value {
         valueStore?: ValueStore
     ): Promise<Value> => {
         const vStore = valueStore ?? DEFAULT_VALUE_STORE;
-        const { sha256, object: obj } = await vStore.putValue(object);
+        const [sha256, obj] = await vStore.putValue(object);
         return new Value(obj, sha256, vStore);
     };
 

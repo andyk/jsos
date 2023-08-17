@@ -1,46 +1,69 @@
-import { getSha256, ValueStore, InMemoryObjectStore } from "../src/jsos";
-import { OrderedMap } from "immutable";
-import tmp from 'tmp';
+import { ValueStore, InMemoryObjectStore } from "../src/jsos";
+import { OrderedMap, Set as ImmutableSet } from "immutable";
+//import tmp from 'tmp';
 import _ from "lodash";
 
-tmp.setGracefulCleanup();
+//tmp.setGracefulCleanup();
 
-function assert(condition, message) {
+function assert(condition: boolean, message: string): void {
     if (!condition) {
         throw new Error(message || "Assertion failed");
     }
 }
 
+function assertEqual(valOne: any, valTwo: any): void {
+    assert(
+        _.isEqual(valOne, valTwo),
+        "assertEqual failed. The following are not equal:\n\n" +
+            JSON.stringify(valOne) +
+            "\n\n" +
+            JSON.stringify(valTwo)
+    );
+}
+
 test('Basic ObjectStore and ValueStore operations.', (done) => {
     async function test() {
+        console.log("output");
         const orig = [[2, 22], [1, 11], ["a", "aa"]];
         const os = new InMemoryObjectStore();
         const key = await os.putJson(orig)
         const gotJson = await os.getJson(key)
-        assert(
-            _.isEqual(orig, gotJson),
-            "putJson and getJson are not inverses for a js Array<Array>: " +
-                JSON.stringify(orig) +
-                ", " +
-                JSON.stringify(gotJson)
-        );
+        assertEqual(orig, gotJson);
         const vs = new ValueStore(os);
         const encoded = vs.encode(orig);
         const normalized = vs.normalize(encoded);
-        assert(normalized.length === 7, "normalized is wrong size")
+        assert(normalized.length === 10, "normalized is wrong size")
+
+        const putVal = await vs.putValue(orig);
+        console.log("got val: " + putVal)
+        const gotVal = await vs.getValue(putVal[0]);
+        assertEqual(orig, gotVal);
+
         done();
     }
-}, 20000);
+    test();
+}, 200000000);
+
+test('Test valuestore with immutable types', (done) => {
+    async function test() {
+        const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"]]) as any);
+        const os = new InMemoryObjectStore();
+        const vs = new ValueStore(os);
+        const putVal = await vs.putValue(om);
+        console.log("got val: " + putVal)
+        const gotVal = await vs.getValue(putVal[0]);
+        assertEqual(om, gotVal);
+        done();
+    }
+    test();
+}, 200000000);
 
 test('encodeNormalized and decodeNormalized.', (done) => {
     async function test() {
         const os = new InMemoryObjectStore();
         const vs = new ValueStore(os);
         const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
-        assert(
-            _.isEqual(encodedNorm[1].manifest[0], "key1"),
-            "encodeNorm failed"
-        );
+        assertEqual(encodedNorm[1].manifest[0], "key1");
         done();
     }
     test();

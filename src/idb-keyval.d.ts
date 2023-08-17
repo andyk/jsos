@@ -1,0 +1,1 @@
+declare module 'idb-keyval/dist/index.cjs';
