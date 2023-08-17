@@ -118,6 +118,8 @@ const ORDERED_MAP_KEY = "~#iOM";
 const ORDERED_IMMUTABLE_SET_KEY = "~#iOS";
 const STACK_KEY = "~#iStk";
 const RECORD_KEY = "~#iR";
+const DATE_KEY = "~#jD";
+const REGEXP_KEY = "~#jR";
 
 const BUILTIN_MAP_KEY = "~#bM";
 const BUILTIN_SET_KEY = "~#bS";
@@ -352,7 +354,7 @@ class MultiObjectStore extends ObjectStore {
  *              getValue(sha256) = return decode(denormalize(decodeNormalized(getJson(sha256))))
  *
  * We encode some types that that JSON doesn't handle natively -- such as Map,
- * Set, Date, and immutables-js Collections -- using the format:
+ * Set, Date, UUID, and immutables-js Collections -- using the format:
  *    [<special_string>, <well_known_format>].
  */
 export class ValueStore {
@@ -544,10 +546,24 @@ export class ValueStore {
        return this.shallowDecode(decodedObj);
     }
 
+    // Returns a copy of `object` that has been encoded.
     // This function performs shallow encoding of objects,
     // so it needs to be called recursively to handle complex types
     // with nested objects that need encoding.
+    //
+    // TODO: upgrade to using https://github.com/WebReflection/flatted
+    // or https://github.com/ungap/structured-clone for encoding/decoding
+    // Date, Boolean, etc. and handling objects w/ circular references.
     private shallowEncode(object: any): any {
+        if (object instanceof Date) {
+            return [DATE_KEY, object.toISOString()];
+        }
+        if (object instanceof RegExp) {
+            return [REGEXP_KEY, {
+                source: object.source,
+                flags: object.flags
+            }];
+        }
         if (object instanceof Map) {
             return [BUILTIN_MAP_KEY, Array.from(object)];
         } else if (object instanceof Set) {
@@ -576,12 +592,7 @@ export class ValueStore {
             return [IMMUTABLE_SET_KEY, object.toArray()];
         }
         if (OrderedSet.isOrderedSet(object)) {
-            // Need a type cast here because of a bug in Immutable.js:
-            // https://github.com/immutable-js/immutable-js/issues/1947
-            return [
-                ORDERED_IMMUTABLE_SET_KEY,
-                (object as Collection<any, any>).toArray(),
-            ];
+            return [ORDERED_IMMUTABLE_SET_KEY, object.toArray()];
         }
         if (Stack.isStack(object)) {
             return [STACK_KEY, object.toArray()];
@@ -590,10 +601,28 @@ export class ValueStore {
             throw "Immutable.Record serialization not yet supported.";
             //return [RECORD_KEY, object.toObject()];
         }
+        if (Array.isArray(object)) {
+            return [...object];
+        }
+        if (object && typeof object === "object") {
+            return { ...object };
+        }
+        if (!isPrimitive(object)) {
+            throw Error(
+                "shallowEncode can only handle things with typeof " +
+                    "string, number, boolean, null, Date, RegExp, or object (including array)"
+            );
+        }
         return object;
     }
 
     private shallowDecode(object: any): any {
+        if (object?.[0] === DATE_KEY) {
+            return new Date(object[1]);
+        }
+        if (object?.[0] === REGEXP_KEY) {
+            return new RegExp(object[1].source, object[1].flags);
+        }
         if (Array.isArray(object)) {
             if (object?.[0] === BUILTIN_MAP_KEY) {
                 return new Map(object[1] as Array<any>);
@@ -623,6 +652,17 @@ export class ValueStore {
             //    throw "Immutable.Record deserialization not yet supported.";
             //    return Record(object[1]);
             //}
+            return [...object];
+        }
+        if (object && typeof object === "object") {
+            return { ...object };
+        }
+        if (!isPrimitive(object)) {
+            throw Error(
+                "shallowDecode can only handle things with typeof " +
+                    "string, number, boolean, null, Date, RegExp, " + 
+                    "or object (including array). Received: " + object
+            );
         }
         return object;
     }
