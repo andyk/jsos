@@ -493,23 +493,25 @@ export class ValueStore {
     }
 
     encode(object: any): Json {
-        return this.recursiveEncode(object, new Set());
+        return this.recursiveEncode(object, new Map<any, any>());
     }
 
     decode(object: Json): any {
         return this.recursiveDecode(object);
     }
 
-    // TODO: track objects we've encoded to be sure we don't get stuck in
-    // infinite loop when objects have reference loops.
-    private recursiveEncode(object: any, visited: Set<any>): any {
+    private recursiveEncode(object: any, visited: Map<any, any>): any {
         let encoded = this.shallowEncode(object);
+        // Track objects we've encoded to be sure we don't get stuck in
+        // infinite loop when objects have reference loops.
+        if (visited.has(object)) {
+            return visited.get(object);
+        } else {
+            visited.set(object, encoded);
+        }
         if (encoded !== null && typeof encoded === "object") {
             for (let k in encoded) {
-                if (!visited.has(object)) {
-                    visited.add(object);
-                    encoded[k] = this.recursiveEncode(encoded[k], visited);
-                }
+                encoded[k] = this.recursiveEncode(encoded[k], visited);
             }
         }
         return encoded;
@@ -564,25 +566,25 @@ export class ValueStore {
         if (ImmutableMap.isMap(object)) {
             return [
                 IMMUTABLE_MAP_KEY,
-                (object as ImmutableMap<any, any>).toObject(),
+                (object as ImmutableMap<any, any>).toArray(),
             ];
         }
         if (List.isList(object)) {
-            return [LIST_KEY, object.toObject()];
+            return [LIST_KEY, object.toArray()];
         }
         if (ImmutableSet.isSet(object)) {
-            return [IMMUTABLE_SET_KEY, object.toObject()];
+            return [IMMUTABLE_SET_KEY, object.toArray()];
         }
         if (OrderedSet.isOrderedSet(object)) {
             // Need a type cast here because of a bug in Immutable.js:
             // https://github.com/immutable-js/immutable-js/issues/1947
             return [
                 ORDERED_IMMUTABLE_SET_KEY,
-                (object as Collection<any, any>).toObject(),
+                (object as Collection<any, any>).toArray(),
             ];
         }
         if (Stack.isStack(object)) {
-            return [STACK_KEY, object.toObject()];
+            return [STACK_KEY, object.toArray()];
         }
         if (Record.isRecord(object)) {
             throw "Immutable.Record serialization not yet supported.";
