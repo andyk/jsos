@@ -1,18 +1,33 @@
+import { jest } from "@jest/globals";
 import _ from "lodash";
-import { ValueStore, InMemoryJsonStore as InMemoryJsonStore, InMemoryVariableStore } from "../src/jsos";
-import { OrderedMap, Map as ImmutableMap, Set as ImmutableSet } from "immutable";
+import {
+    ValueStore,
+    InMemoryJsonStore,
+    InMemoryVariableStore,
+    VariableUpdateCallback,
+    Value,
+    Variable,
+} from "../src/jsos";
+import {
+    OrderedMap,
+    Map as ImmutableMap,
+    Set as ImmutableSet,
+} from "immutable";
 //import tmp from 'tmp';
 
 //tmp.setGracefulCleanup();
 
-test('Basic ObjectStore and ValueStore operations.', async () => {
-    console.log("output");
-    const orig = [[2, 22], [1, 11], ["a", "aa"]];
-    const os = new InMemoryJsonStore();
-    const key = await os.putJson(orig);
-    const gotJson = await os.getJson(key);
+test("Basic ObjectStore and ValueStore operations.", async () => {
+    const orig = [
+        [2, 22],
+        [1, 11],
+        ["a", "aa"],
+    ];
+    const js = new InMemoryJsonStore();
+    const key = await js.putJson(orig);
+    const gotJson = await js.getJson(key);
     expect(orig).toEqual(gotJson);
-    const vs = new ValueStore(os);
+    const vs = new ValueStore(js);
     const encoded = vs.encode(orig);
     const normalized = vs.normalize(encoded);
     expect(normalized.length).toBe(10);
@@ -22,8 +37,14 @@ test('Basic ObjectStore and ValueStore operations.', async () => {
     expect(orig).toEqual(gotVal);
 });
 
-test('Test valuestore with immutable types', async () => {
-    const om = [new Date, OrderedMap(([["a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "CC"]])]]) as any)];
+test("Test valuestore with immutable types", async () => {
+    const om = [
+        new Date(),
+        OrderedMap([
+            ["a", { inner: ImmutableSet([1, { innerinner: "inin" }]) }],
+            ["b", ImmutableMap([["c", "CC"]])],
+        ] as any),
+    ];
     // TODO support undefined too
     //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
     const os = new InMemoryJsonStore();
@@ -33,26 +54,80 @@ test('Test valuestore with immutable types', async () => {
     expect(om).toEqual(gotVal);
 });
 
-test('encodeNormalized and decodeNormalized.', async () => {
-    const os = new InMemoryJsonStore();
-    const vs = new ValueStore(os);
+test("encodeNormalized and decodeNormalized.", async () => {
+    const js = new InMemoryJsonStore();
+    const vs = new ValueStore(js);
     const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
     expect(encodedNorm[1].manifest[0]).toBe("key1");
 });
 
-test('VariableStore basics', async () => {
+test("VariableStore basics", async () => {
     const varStore = new InMemoryVariableStore();
-    expect(await varStore.newVariable("name", "namespace", "exampleSha256")).toBe(true);
-    expect(await varStore.newVariable("name", "namespace", "exampleSha256")).toBe(false);
-    expect(await varStore.getVariable("name", "namespace")).toBe("exampleSha256");
-    expect(await varStore.updateVariable("name", "namespace", "exampleSha256", "newSha256")).toBe(true);
+    expect(
+        await varStore.newVariable("name", "namespace", "exampleSha256")
+    ).toBe(true);
+    expect(
+        await varStore.newVariable("name", "namespace", "exampleSha256")
+    ).toBe(false);
+    expect(await varStore.getVariable("name", "namespace")).toBe(
+        "exampleSha256"
+    );
+    expect(
+        await varStore.updateVariable(
+            "name",
+            "namespace",
+            "exampleSha256",
+            "newSha256"
+        )
+    ).toBe(true);
     expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
-    expect(await varStore.updateVariable("name", "namespace", "wrongCurrentSha256", "newSha256")).toBe(false);
+    expect(
+        await varStore.updateVariable(
+            "name",
+            "namespace",
+            "wrongCurrentSha256",
+            "newSha256"
+        )
+    ).toBe(false);
     expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
+    const callBack: VariableUpdateCallback = jest.fn(
+        (n, ns, oldSha256, newSha256) => {
+            expect(n).toBe("name");
+            expect(ns).toBe("namespace");
+            expect(oldSha256).toBe("newSha256");
+            expect(newSha256).toBe("newerSha256");
+        }
+    );
+    const subscrID = varStore.subscribeToUpdate("name", "namespace", callBack);
+    expect(callBack).toBeCalledTimes(0);
+    expect(
+        await varStore.updateVariable(
+            "name",
+            "namespace",
+            "newSha256",
+            "newerSha256"
+        )
+    ).toBe(true);
+    expect(callBack).toBeCalledTimes(1);
+    expect(varStore.unsubscribeFromUpdate(subscrID)).toBe(true);
+    expect(
+        await varStore.updateVariable(
+            "name",
+            "namespace",
+            "newerSha256",
+            "evenNewerSha256"
+        )
+    ).toBe(true);
+    expect(callBack).toBeCalledTimes(1);
+});
 
-    const callBack = (n, ns, oldSha256, newSha256) => {};
-    const subscrID = await varStore.subscribeToUpdate("name", "namespace", callBack);
-
+test("Value basics", async () => {
+    const init = [1,2,3];
+    const v = await Value.create(init)
+    expect(v[0]).toBe(1);
+    expect(v[2]).toBe(3);
+    expect(v.length).toBe(3);
+    expect(v[3]).toBe(4);
 });
 
 //test('Testing normalized put & get of an array', (done) => {
@@ -180,12 +255,12 @@ test('VariableStore basics', async () => {
 //}, 60000);
 //
 //test('Testing Cache', (done) => {
-//    (async () => { 
+//    (async () => {
 //        const tmpDir = tmp.dirSync(({} as tmp.Options));
 //        const testCache = new FileBackedMemoryStore(tmpDir.name + "/testCache");
 //        const testKey = "testKey";
 //        const testObj = {a: "aa", b: "bb"};
-//        testCache.put(testKey, testObj); 
+//        testCache.put(testKey, testObj);
 //        assert(_.isEqual(testCache.get(testKey), testObj), "Cache put and get were not inverses");
 //        done();
 //    })();
@@ -194,7 +269,7 @@ test('VariableStore basics', async () => {
 //test('Testing Variable operations', (done) => {
 //    (async () => {
 //        //http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
-//        const randStr = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15); 
+//        const randStr = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 //        const variable = await jsos.variable(randStr);
 //        assert(variable.subscribed(), "Variable did not subscribe to supabase.");
 //        let shouldBeNull = await variable.get();

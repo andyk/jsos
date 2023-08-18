@@ -90,7 +90,7 @@ type EncodedNormalized = [
     string,
     { objectSha256: string; manifest: Array<string> }
 ];
-type VariableUpdateCallback = (
+export type VariableUpdateCallback = (
     name: string,
     namespace: string | null,
     oldSha256: string | null,
@@ -1695,34 +1695,35 @@ export interface Variable {
 //    };
 //}
 
-//export class Variable implements VariableInterface {
-//    /*
-//        A Variable has a name, optionally a namespace, and the address (i.e., sha256) of a Value.
-//        A variable can be updated to refer to a different Value. This is done via an atomic
-//        update to the backing database.
-//        By default a Variable is subscribed to Supabase postgres updates to the variable.
-//    */
-//    __jsosVariableStore: VariableStore;
-//    __jsosName: string;
-//    __jsosNamespace: string | null;
-//    __jsosValue: Value;
-//    __jsosParentValue: Value;
-//    __jsosSubscribeToUpdates: boolean;
-//
-//    constructor(
-//        variableStore: VariableStore,
-//        name: string,
-//        namespace: string | null = null,
-//        value: Value,
-//        parentValue: Value
-//    ) {
-//        this.__jsosVariableStore = variableStore;
-//        this.__jsosName = name;
-//        this.__jsosNamespace = namespace;
-//        this.__jsosValue = value;
-//        this.__jsosParentValue = parentValue;
-//    }
-//
+export class Variable {
+    /*
+       A Variable has a name, optionally a namespace, and the address (i.e., sha256) of a Value.
+        A variable can be updated to refer to a different Value. This is done via an atomic
+        update to the backing database.
+        By default a Variable is subscribed to Supabase postgres updates to the variable.
+    */
+    __jsosVariableStore: VariableStore;
+    __jsosName: string;
+    __jsosNamespace: string | null;
+    __jsosValue: Value;
+    __jsosParentValue: Value;
+    //__jsosSubscribeToUpdates: boolean;
+
+    constructor(
+        variableStore: VariableStore,
+        name: string,
+        namespace: string | null = null,
+        value: Value,
+        parentValue: Value
+    ) {
+        this.__jsosVariableStore = variableStore;
+        this.__jsosName = name;
+        this.__jsosNamespace = namespace;
+        this.__jsosValue = value;
+        this.__jsosParentValue = parentValue;
+    }
+}
+
 //    static create = async (
 //        jsosClient: JsosClient,
 //        name: string,
