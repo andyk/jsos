@@ -842,6 +842,7 @@ export abstract class VariableStore {
         namespace: string | null
     ): Promise<string | undefined>;
 
+    // Return true if the Variable was successfully created.
     abstract newVariable(
         name: string,
         namespace: string | null,
@@ -897,6 +898,60 @@ export abstract class VariableStore {
             });
         }
     }
+}
+
+export class InMemoryVariableStore extends VariableStore {
+    private variableMap: Map<string, string>;
+    private mutex: Mutex;
+
+    constructor() {
+        super();
+        this.variableMap = new Map();
+        this.mutex = new Mutex();
+    }
+
+    async getVariable(
+        name: string,
+        namespace: string | null
+    ): Promise<string | undefined> {
+        return await this.mutex.runExclusive(async () => {
+            return this.variableMap.get(_toVarKey(name, namespace));
+        });
+    }
+
+    async newVariable(name: string, namespace: string | null, valueSha256: string): Promise<boolean> {
+        const key = _toVarKey(name, namespace);
+        return await this.mutex.runExclusive(async () => {
+            if (this.variableMap.has(key)) {
+                return false;
+            }
+            this.variableMap.set(key, valueSha256);
+            this.notifyListeners(name, namespace, null, valueSha256);
+            return true;
+        });
+    }
+
+    async updateVariable(
+        name: string,
+        namespace: string | null,
+        oldSha256: string,
+        newSha256: string
+    ): Promise<boolean> {
+        const key = _toVarKey(name, namespace);
+        return await this.mutex.runExclusive(async () => {
+            const currSha256 = this.variableMap.get(key);
+            if (currSha256 !== oldSha256) {
+                console.error(
+                    `provided oldSha256 ${oldSha256} does not match current value in in-memory variableMap ${currSha256}`
+                );
+                return false;
+            }
+            this.variableMap.set(key, newSha256);
+            this.notifyListeners(name, namespace, oldSha256, newSha256);
+            return true;
+        });
+    }
+
 }
 
 // A shared mutable object.
@@ -990,53 +1045,6 @@ export class InMemoryObjectStore extends ObjectStore {
         }
     }
 }
-
-//export class InMemoryVariableStore extends VariableStore {
-//    private variableMap: Map<string, string>;
-//    private mutex: Mutex;
-//
-//    constructor() {
-//        super();
-//        this.variableMap = new Map();
-//        this.mutex = new Mutex();
-//    }
-//
-//    async newVariable {
-//
-//    }
-//
-//    async updateVariable(
-//        name: string,
-//        namespace: string | null,
-//        oldSha256: string,
-//        newSha256: string
-//    ): Promise<boolean> {
-//        const key = _toVarKey(name, namespace);
-//        await this.mutex.runExclusive(async () => {
-//            const currSha256 = this.variableMap.get(key);
-//            if (currSha256 !== oldSha256) {
-//                console.error(
-//                    `provided oldSha256 ${oldSha256} does not match current value in in-memory variableMap ${currSha256}`
-//                );
-//                return false;
-//            }
-//            this.variableMap.set(key, newSha256);
-//            this.notifyListeners(name, namespace, oldSha256, newSha256);
-//        });
-//        return true;
-//    }
-//
-//    async getVariable(
-//        name: string,
-//        namespace: string | null
-//    ): Promise<string | undefined> {
-//        let result: string | undefined;
-//        await this.mutex.runExclusive(async () => {
-//            result = this.variableMap.get(`${namespace}:${name}`);
-//        });
-//        return result;
-//    }
-//}
 
 // One quirk of using idb-keyval is that per [1] "createStore won't let you create
 // multiple stores within the same database. Nor will it let you create a store

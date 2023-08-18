@@ -1,4 +1,5 @@
-import { ValueStore, InMemoryObjectStore } from "../src/jsos";
+import _ from "lodash";
+import { ValueStore, InMemoryObjectStore, InMemoryVariableStore } from "../src/jsos";
 import { OrderedMap, Map as ImmutableMap, Set as ImmutableSet } from "immutable";
 //import tmp from 'tmp';
 
@@ -22,7 +23,7 @@ test('Basic ObjectStore and ValueStore operations.', async () => {
 });
 
 test('Test valuestore with immutable types', async () => {
-    const om = [new Date, OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "CC"]])]]) as any)];
+    const om = [new Date, OrderedMap(([["a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "CC"]])]]) as any)];
     // TODO support undefined too
     //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
     const os = new InMemoryObjectStore();
@@ -37,6 +38,20 @@ test('encodeNormalized and decodeNormalized.', async () => {
     const vs = new ValueStore(os);
     const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
     expect(encodedNorm[1].manifest[0]).toBe("key1");
+});
+
+test('VariableStore basics', async () => {
+    const varStore = new InMemoryVariableStore();
+    expect(await varStore.newVariable("name", "namespace", "exampleSha256")).toBe(true);
+    expect(await varStore.newVariable("name", "namespace", "exampleSha256")).toBe(false);
+    expect(await varStore.getVariable("name", "namespace")).toBe("exampleSha256");
+    expect(await varStore.updateVariable("name", "namespace", "exampleSha256", "newSha256")).toBe(true);
+    expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
+    expect(await varStore.updateVariable("name", "namespace", "wrongCurrentSha256", "newSha256")).toBe(false);
+    expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
+
+    const callBack = (n, ns, oldSha256, newSha256) => {};
+    const subscrID = await varStore.subscribeToUpdate("name", "namespace", callBack);
 });
 
 //test('Testing normalized put & get of an array', (done) => {
