@@ -22,9 +22,9 @@ test('Basic ObjectStore and ValueStore operations.', async () => {
 });
 
 test('Test valuestore with immutable types', async () => {
-    const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "cc"]])]]) as any);
+    const om = [new Date, OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "CC"]])]]) as any)];
     // TODO support undefined too
-    // const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
+    //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
     const os = new InMemoryObjectStore();
     const vs = new ValueStore(os);
     const [putSha256, _] = await vs.putValue(om);

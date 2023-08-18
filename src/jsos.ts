@@ -538,9 +538,7 @@ export class ValueStore {
         }
         if (object !== null && typeof object === "object") {
             for (let k in object) {
-                decodedObj[k] = this.shallowDecode(
-                    this.recursiveDecode(object[k])
-                );
+                decodedObj[k] = this.recursiveDecode(object[k]);
             }
         }
        return this.shallowDecode(decodedObj);
