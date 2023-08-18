@@ -1,5 +1,5 @@
 import _ from "lodash";
-import { ValueStore, InMemoryObjectStore, InMemoryVariableStore } from "../src/jsos";
+import { ValueStore, InMemoryJsonStore as InMemoryJsonStore, InMemoryVariableStore } from "../src/jsos";
 import { OrderedMap, Map as ImmutableMap, Set as ImmutableSet } from "immutable";
 //import tmp from 'tmp';
 
@@ -8,7 +8,7 @@ import { OrderedMap, Map as ImmutableMap, Set as ImmutableSet } from "immutable"
 test('Basic ObjectStore and ValueStore operations.', async () => {
     console.log("output");
     const orig = [[2, 22], [1, 11], ["a", "aa"]];
-    const os = new InMemoryObjectStore();
+    const os = new InMemoryJsonStore();
     const key = await os.putJson(orig);
     const gotJson = await os.getJson(key);
     expect(orig).toEqual(gotJson);
@@ -26,7 +26,7 @@ test('Test valuestore with immutable types', async () => {
     const om = [new Date, OrderedMap(([["a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", ImmutableMap([["c", "CC"]])]]) as any)];
     // TODO support undefined too
     //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
-    const os = new InMemoryObjectStore();
+    const os = new InMemoryJsonStore();
     const vs = new ValueStore(os);
     const [putSha256, _] = await vs.putValue(om);
     const gotVal = await vs.getValue(putSha256);
@@ -34,7 +34,7 @@ test('Test valuestore with immutable types', async () => {
 });
 
 test('encodeNormalized and decodeNormalized.', async () => {
-    const os = new InMemoryObjectStore();
+    const os = new InMemoryJsonStore();
     const vs = new ValueStore(os);
     const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
     expect(encodedNorm[1].manifest[0]).toBe("key1");
@@ -52,6 +52,7 @@ test('VariableStore basics', async () => {
 
     const callBack = (n, ns, oldSha256, newSha256) => {};
     const subscrID = await varStore.subscribeToUpdate("name", "namespace", callBack);
+
 });
 
 //test('Testing normalized put & get of an array', (done) => {

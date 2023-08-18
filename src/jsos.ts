@@ -35,24 +35,24 @@ arrangements of any Json types or Immutable.Collections
 == getSha256() ==
 returns the hash of an object, which is always used as an address in ValueStores
 
-== ObjectStore ==
+== JsonStore ==
 Represents the lowest layer backing store for Values. Provides low-level
 functions to store and retrieve JSON from a backing store. The backing store
 could be an RDBMS, a document store, a file, an in-memory data structure, etc.
-Objects are stored with the hash value of the JSON as the key. ObjectStores do not
+Objects are stored with the hash value of the JSON as the key. JsonStores do not
 contain Logic for encoding/decoding types that are not JSON-native (i.e. types
-besides {Array/Plain Object/primitive}) to/from Json. A ObjectStore may wrap a
+besides {Array/Plain Object/primitive}) to/from Json. A JsonStore may wrap a
 storage engine that uses a non-JSON format for the actual underlying storage
 (e.g., BSON, an RDBMS, etc.) but the key used to store the data is always a
 sha256 hash of the JSON representation of the object that is passed into the
-ObjectStore.
+JsonStore.
 
 == ValueStore ==
-A ValueStore wraps an array of ObjectStores to make them more user friendly by...
+A ValueStore wraps an array of JsonStores to make them more user friendly by...
     1) allowing more types to be stored than just JSON (via an Encoder)
     2) it may also decide to break a single object into more than one object in
-       the underlying ObjectStore (e.g., to normalize the object).
-Thus, a ValueStore has a ObjectStore member, an EncoderDecoder member, and
+       the underlying JsonStore (e.g., to normalize the object).
+Thus, a ValueStore has a JsonStore member, an EncoderDecoder member, and
 methods for getting and putting Values.
 
 == VariableStore ==
@@ -98,7 +98,7 @@ type VariableUpdateCallback = (
 ) => void;
 
 const LOCKFILE_OPTIONS = { retries: 10 };
-const OBJECT_STORE_NAME = "JsosObjectStore";
+const OBJECT_STORE_NAME = "JsosJsonStore";
 const OBJECT_STORE_FILE_PATH = `./${OBJECT_STORE_NAME}.json`;
 const VARIABLE_STORE_PATH = "JsosVariableStore";
 const VARIABLE_STORE_FILE_PATH = `./${VARIABLE_STORE_PATH}.json`;
@@ -220,7 +220,7 @@ function _fromVarKey(key: string | null) {
 
 // A key-value store for storing plain objects using sha256 as key. Can be backed
 // by in-memory, file-system, browser Local Storage or IndexedDB, server-based.
-abstract class ObjectStore {
+abstract class JsonStore {
     // Test if value with provided sha256 exists in this store.
     abstract hasJson(sha256: string): Promise<boolean>;
 
@@ -276,22 +276,22 @@ abstract class ObjectStore {
     }
 }
 
-class MultiObjectStore extends ObjectStore {
-    readonly objectStores: Array<ObjectStore>;
+class MultiJsonStore extends JsonStore {
+    readonly jsonStores: Array<JsonStore>;
 
-    constructor(objectStores: Array<ObjectStore>) {
-        if (objectStores.length === 0) {
+    constructor(jsonStores: Array<JsonStore>) {
+        if (jsonStores.length === 0) {
             throw new Error(
-                "MultiObjectStore must have at least one ObjectStore"
+                "MultiJsonStore must have at least one JsonStore"
             );
         }
         super();
-        this.objectStores = objectStores;
+        this.jsonStores = jsonStores;
     }
 
     async hasJson(sha256: string): Promise<boolean> {
-        for (const objectStore of this.objectStores) {
-            if (await objectStore.hasJson(sha256)) {
+        for (const jsonStore of this.jsonStores) {
+            if (await jsonStore.hasJson(sha256)) {
                 return true;
             }
         }
@@ -299,14 +299,14 @@ class MultiObjectStore extends ObjectStore {
     }
 
     async getJson(sha256: string): Promise<Json | undefined> {
-        for (const objectStore of this.objectStores) {
-            return await objectStore.getJson(sha256);
+        for (const jsonStore of this.jsonStores) {
+            return await jsonStore.getJson(sha256);
         }
     }
 
     async putJson(object: Json): Promise<string> {
-        const promises = this.objectStores.map(async (objectStore) => {
-            return objectStore.putJson(object);
+        const promises = this.jsonStores.map(async (jsonStore) => {
+            return jsonStore.putJson(object);
         });
         const results = await Promise.all(promises);
         results.reduce((prev, curr) => {
@@ -321,8 +321,8 @@ class MultiObjectStore extends ObjectStore {
     }
 
     async deleteJson(sha256: string): Promise<void> {
-        const promises = this.objectStores.map(async (objectStore) => {
-            objectStore.deleteJson(sha256);
+        const promises = this.jsonStores.map(async (jsonStore) => {
+            jsonStore.deleteJson(sha256);
         });
         return;
     }
@@ -331,10 +331,10 @@ class MultiObjectStore extends ObjectStore {
 /*
  * A ValueStore is a key-value store for encoding->normalizing->storing or
  * retrieving->denormalizing->decoding immutable Javascript objects to/from
- * undelying ObjectStores.  An ObjectStore puts and gets JSON objects. A
- * ValueStore is one layer higher in abstraction than an ObjectStore and is
+ * undelying JsonStores.  An JsonStore puts and gets JSON objects. A
+ * ValueStore is one layer higher in abstraction than an JsonStore and is
  * responsible for transforming an object of any type into normalized JSON
- * before it is put into the ObjectStore and then performing the inverse
+ * before it is put into the JsonStore and then performing the inverse
  * transformation (as much as possible) when it is subsequently retrieved.  This
  * is useful for encoding objects that JSON doesn't handle natively, as well as
  * for encoding objects in a way that is more efficient or performant (e.g.,
@@ -358,10 +358,10 @@ class MultiObjectStore extends ObjectStore {
  *    [<special_string>, <well_known_format>].
  */
 export class ValueStore {
-    objectStore: ObjectStore;
+    jsonStore: JsonStore;
 
-    constructor(objectStore: ObjectStore) {
-        this.objectStore = objectStore;
+    constructor(jsonStore: JsonStore) {
+        this.jsonStore = jsonStore;
     }
 
     // Similar to putJson() but first:
@@ -369,7 +369,7 @@ export class ValueStore {
     // b) normalizes the object into one or more "normalized objects",
     // c) encodes the fact that this is a normalized object
     // d) puts all of the normalized objects and associated sub-objects to this
-    //    ValueStore's ObjectStore
+    //    ValueStore's JsonStore
     //
     // A normalized object is always flat (never nested) because all objects are
     // stored separately in the object store and referenced by sha256.
@@ -405,7 +405,7 @@ export class ValueStore {
         const encodedAsNormalized = this.encodeNormalized(
             putNormalized.map((pair) => pair[0])
         );
-        const encodedAsNormalizedSha256 = await this.objectStore.putJson(
+        const encodedAsNormalizedSha256 = await this.jsonStore.putJson(
             encodedAsNormalized
         );
         if (putNormalized.length === 0) {
@@ -422,7 +422,7 @@ export class ValueStore {
     ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
         const normalized = this.normalize(encoded);
-        const manifest = await this.objectStore.putJsons(normalized);
+        const manifest = await this.jsonStore.putJsons(normalized);
         if (normalized.length !== manifest.length) {
             throw new Error(
                 `putJsons() returned ${manifest.length} sha256 strings, but ` +
@@ -447,9 +447,9 @@ export class ValueStore {
     }
 
     // Throws an error if the object is not encoded and normalized.  If you
-    // fetch an object regardless of its type, use ObjectStore.getJson()
+    // fetch an object regardless of its type, use JsonStore.getJson()
     async getValue(sha256: string): Promise<any> {
-        const encodedNormalized = await this.objectStore.getJson(sha256);
+        const encodedNormalized = await this.jsonStore.getJson(sha256);
         if (!isEncodedNormalized(encodedNormalized)) {
             throw new Error(
                 `Expected object to be encoded as normalized but it was not: ${encodedNormalized}`
@@ -487,11 +487,11 @@ export class ValueStore {
     // being deleted. We would have to maintain a reverse index of all normalized
     // objects to support viral/cascading deletes.
     async deleteValue(sha256: string): Promise<void> {
-        await this.objectStore.deleteJson(sha256);
+        await this.jsonStore.deleteJson(sha256);
     }
 
     async deleteValues(sha256Array: Array<string>): Promise<void> {
-        await this.objectStore.deleteJsons(sha256Array);
+        await this.jsonStore.deleteJsons(sha256Array);
     }
 
     encode(object: any): Json {
@@ -717,7 +717,7 @@ export class ValueStore {
 
     // Reconstructs exactly 1 potentially nested object (or primitive) out of
     // >=1 flat object(s) or primitive(s). This function does not fetch any
-    // objects from the ObjectStore, all sub-objects (of type NormalizedJson)
+    // objects from the JsonStore, all sub-objects (of type NormalizedJson)
     // necessary to successfully denormalize must be proided in the input Array.
     // Assumes that the root of the DAG is the last element of the input Array.
     denormalize(objects: Array<[string, NormalizedJson]>): Promise<Json> {
@@ -783,7 +783,7 @@ export class ValueStore {
             );
         }
         const manifest = obj[1].manifest;
-        const gotJsons = await this.objectStore.getJsons(manifest);
+        const gotJsons = await this.jsonStore.getJsons(manifest);
         const successfulFetches = gotJsons.filter(
             (json): json is NormalizedJson => isNormalizedJson(json)
         );
@@ -793,7 +793,7 @@ export class ValueStore {
             );
             throw Error(
                 "Did not successfully get all normalized objects in manifest " +
-                    "from ObjectStore. Failed to get the following sha256s: " +
+                    "from JsonStore. Failed to get the following sha256s: " +
                     failedSha256s
             );
         }
@@ -954,70 +954,7 @@ export class InMemoryVariableStore extends VariableStore {
 
 }
 
-// A shared mutable object.
-//
-// Wraps any mutable object, auto-captures mutations to that object by
-// creating a new underlying `Value` from the post-mutated object and
-// setting __jsosValue to it.
-//
-// Use cases:
-// 1) shared
-//   a) remote changes are asyncrously pushed automatically to this Variable
-//      causing the underlying Value to be replaced with a new one.
-//   b) manual/explicit syncing done via __jsosPull();
-// c) const - essentially a snapshot of a named Value at a point in time. Can't
-//    be updated. Once a Variable object is set to const, it can't be reverted to
-//    a mutable object. You can however, create a new Variable object from the
-//    same (name, namespace, valueSha256) tuple that is not a const.
-//
-// A Variable is intrinsically shared (via optimistic concurrency control)
-// but you do have control over:
-// 1) who it is shared with (e.g., you can share only with yourself
-//    by using only an in-memory VariableStore)
-// 2) how conflicts are handled (e.g, pull updates and retry)
-//
-// When a variable update fails due to a conflict, an error is thrown. You
-// can catch it, pull updates, and try again.
-//
-// If __jsosUpdateMode is false, then the value is not auto-updated when
-// changes are pushed to __jsosVariableStore for the (__jsosName,
-// __jsosNamespace) key. If it is true, then __jsosValue is
-// updated automatically when changes are pushed to __jsosVariableStore
-// for the (__jsosName, __jsosNamespace) key.
-//
-// The level of sharing is determined by who else has access to
-// __jsosVariableStore. If that is not a shared database, e.g.: if it
-// is an InMemoryStore, then you are only sharing with yourself which should
-// povide sufficient control.
-//
-// We use Optimistic Concurrencey Control, so updates to a variable will
-// thow an error if the variable has been changed in
-// __jsosVariableStore since this variable last pulled updates from it
-// either via subscribing to updates or via calling __jsosPull().
-//
-export interface Variable {
-    __jsosVariableStore: VariableStore;
-    __jsosName: string;
-    __jsosNamespace: string | null;
-    __jsosValue: Value;
-    __jsosParentValue: Value;
-    // If true, this Variable behaves like a named Value by making it immutable.
-    // To make changes one has to update the Variable to make this false.
-    __jsosIsConst: boolean;
-    __jsosSubscribeToUpdates: boolean;
-    // while true, causes local mutations to this variable to fail, though remote
-    // changes can still be pulled in. This is a useful guard against accidental
-    // updates.
-    __jsosIsReadOnly: boolean;
-    // Fetch Value from VariableStore and set __jsosValue to it,
-    // overwriting whaterver value is there. This will throw an error if
-    // __jsosIsConst is true. Pulling updates is useful when
-    // __jsosSubscribeToUpdates is false, in which case it gives you
-    // control over when to sync this Variable to the shared value.
-    __jsosPull(): void;
-}
-
-export class InMemoryObjectStore extends ObjectStore {
+export class InMemoryJsonStore extends JsonStore {
     private valueMap: Map<string, any>;
 
     constructor() {
@@ -1056,7 +993,7 @@ export class InMemoryObjectStore extends ObjectStore {
 // [1] https://github.com/jakearchibald/idb-keyval/blob/main/custom-stores.md
 
 // An in-memory cache backed by IndexedDB.
-export class BrowserIndexedDBObjectStore extends ObjectStore {
+export class BrowserIndexedDBJsonStore extends JsonStore {
     private readonly databaseName: string;
     private readonly storeName: string;
     private store: ReturnType<typeof createStore>;
@@ -1236,27 +1173,27 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
 }
 
 // An in-memory object store backed by a local file (not available in browser)
-export class FileBackedObjectStore extends ObjectStore {
+export class FileBackedJsonStore extends JsonStore {
     private cache: { [key: string]: any } = {};
-    private objectStoreFileName: string;
+    private jsonStoreFileName: string;
     private indexDBStore: ReturnType<typeof createStore> | null;
 
     constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
         if (typeof window !== "undefined") {
             throw new Error(
-                "FileBackedObjectStore is not available in browser"
+                "FileBackedJsonStore is not available in browser"
             );
         }
         super();
-        this.objectStoreFileName = fileName;
+        this.jsonStoreFileName = fileName;
         this.indexDBStore = null;
         this.load();
     }
 
     private async load() {
         const fs = require("fs");
-        if (fs.existsSync(this.objectStoreFileName)) {
-            const cacheData = fs.readFileSync(this.objectStoreFileName, "utf8");
+        if (fs.existsSync(this.jsonStoreFileName)) {
+            const cacheData = fs.readFileSync(this.jsonStoreFileName, "utf8");
             const result = JSON.parse(cacheData);
             Object.assign(this.cache, result);
         }
@@ -1287,7 +1224,7 @@ export class FileBackedObjectStore extends ObjectStore {
         const fs = require("fs");
         try {
             await fs.writeFile(
-                this.objectStoreFileName,
+                this.jsonStoreFileName,
                 JSON.stringify(this.cache)
             );
         } catch (err) {
@@ -1302,7 +1239,7 @@ export class FileBackedVariableStore extends VariableStore {
     constructor(fileName: string = VARIABLE_STORE_FILE_PATH) {
         if (typeof window !== "undefined") {
             throw new Error(
-                "FileBackedObjectStore is not available in browser"
+                "FileBackedJsonStore is not available in browser"
             );
         }
         super();
@@ -1382,7 +1319,7 @@ export class FileBackedVariableStore extends VariableStore {
     }
 }
 
-class SupabaseObjectStore extends ObjectStore {
+class SupabaseJsonStore extends JsonStore {
     supabaseClient: SupabaseClient;
     objectsTableName: string;
     constructor(
@@ -1460,7 +1397,7 @@ class SupabaseObjectStore extends ObjectStore {
         function assertReturnEqualToPutObj(row: { json: any }) {
             if (!_.isEqual(row.json, object)) {
                 throw new Error(
-                    `The Object that was inserted into SupabaseObjectStore ` +
+                    `The Object that was inserted into SupabaseJsonStore ` +
                         `${object} was not the same as the object that was ` +
                         `returned ${row.json}`
                 );
@@ -1480,7 +1417,7 @@ class SupabaseObjectStore extends ObjectStore {
 }
 
 const DEFAULT_VALUE_STORE = new ValueStore(
-    new MultiObjectStore([new InMemoryObjectStore()])
+    new MultiJsonStore([new InMemoryJsonStore()])
 );
 
 export class Value {
@@ -1534,6 +1471,69 @@ export class Value {
     __jsosIsValue(): true {
         return true;
     }
+}
+
+// A shared mutable object.
+//
+// Wraps any mutable object, auto-captures mutations to that object by
+// creating a new underlying `Value` from the post-mutated object and
+// setting __jsosValue to it.
+//
+// Use cases:
+// 1) shared
+//   a) remote changes are asyncrously pushed automatically to this Variable
+//      causing the underlying Value to be replaced with a new one.
+//   b) manual/explicit syncing done via __jsosPull();
+// c) const - essentially a snapshot of a named Value at a point in time. Can't
+//    be updated. Once a Variable object is set to const, it can't be reverted to
+//    a mutable object. You can however, create a new Variable object from the
+//    same (name, namespace, valueSha256) tuple that is not a const.
+//
+// A Variable is intrinsically shared (via optimistic concurrency control)
+// but you do have control over:
+// 1) who it is shared with (e.g., you can share only with yourself
+//    by using only an in-memory VariableStore)
+// 2) how conflicts are handled (e.g, pull updates and retry)
+//
+// When a variable update fails due to a conflict, an error is thrown. You
+// can catch it, pull updates, and try again.
+//
+// If __jsosUpdateMode is false, then the value is not auto-updated when
+// changes are pushed to __jsosVariableStore for the (__jsosName,
+// __jsosNamespace) key. If it is true, then __jsosValue is
+// updated automatically when changes are pushed to __jsosVariableStore
+// for the (__jsosName, __jsosNamespace) key.
+//
+// The level of sharing is determined by who else has access to
+// __jsosVariableStore. If that is not a shared database, e.g.: if it
+// is an InMemoryStore, then you are only sharing with yourself which should
+// povide sufficient control.
+//
+// We use Optimistic Concurrencey Control, so updates to a variable will
+// thow an error if the variable has been changed in
+// __jsosVariableStore since this variable last pulled updates from it
+// either via subscribing to updates or via calling __jsosPull().
+//
+export interface Variable {
+    __jsosVariableStore: VariableStore;
+    __jsosName: string;
+    __jsosNamespace: string | null;
+    __jsosValue: Value;
+    __jsosParentValue: Value;
+    // If true, this Variable behaves like a named Value by making it immutable.
+    // To make changes one has to update the Variable to make this false.
+    __jsosIsConst: boolean;
+    __jsosSubscribeToUpdates: boolean;
+    // while true, causes local mutations to this variable to fail, though remote
+    // changes can still be pulled in. This is a useful guard against accidental
+    // updates.
+    __jsosIsReadOnly: boolean;
+    // Fetch Value from VariableStore and set __jsosValue to it,
+    // overwriting whaterver value is there. This will throw an error if
+    // __jsosIsConst is true. Pulling updates is useful when
+    // __jsosSubscribeToUpdates is false, in which case it gives you
+    // control over when to sync this Variable to the shared value.
+    __jsosPull(): void;
 }
 
 //class SupabaseVariableStore extends VariableStore {
