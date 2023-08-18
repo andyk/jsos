@@ -96,6 +96,8 @@ export type VariableUpdateCallback = (
     oldSha256: string | null,
     newSha256: string
 ) => void;
+type SyncValUpdateFn = (old: any) => any;
+type AsyncValUpdateFn = (old: any) => Promise<any>;
 
 const LOCKFILE_OPTIONS = { retries: 10 };
 const OBJECT_STORE_NAME = "JsosJsonStore";
@@ -401,23 +403,23 @@ export class ValueStore {
     //     ]
     //   }>
     async putValue(object: any): Promise<[string, EncodedNormalized]> {
-        const putNormalized = await this.normalizeEncodePutValue(object);
-        const encodedAsNormalized = this.encodeNormalized(
+        const putNormalized = await this.encodeNormalizePutValue(object);
+        const encodedNormalized = this.encodeNormalized(
             putNormalized.map((pair) => pair[0])
         );
-        const encodedAsNormalizedSha256 = await this.jsonStore.putJson(
-            encodedAsNormalized
+        const encodedNormalizedSha256 = await this.jsonStore.putJson(
+            encodedNormalized
         );
         if (putNormalized.length === 0) {
             throw new Error(
                 "normalizeEncodePutValue() returned 0 objects but should have returned >0."
             );
         }
-        return [encodedAsNormalizedSha256, encodedAsNormalized];
+        return [encodedNormalizedSha256, encodedNormalized];
     }
 
     // Outer-most normalized object is last in the returned array.
-    async normalizeEncodePutValue(
+    async encodeNormalizePutValue(
         object: any
     ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
@@ -1424,6 +1426,7 @@ export class Value {
     __jsosValueStore: ValueStore;
     __jsosSha256: string;
     __jsosObject: any;
+    __jsosEncodedNormalizedObject: EncodedNormalized;
 
     async __jsosUpdateIn(
         indexArray: Array<string | number>,
@@ -1439,23 +1442,38 @@ export class Value {
         throw Error("Not implemented");
     }
 
-    async __jsosSet(newVal: any): Promise<Value> {
-        this.__jsosObject = this.__jsosValueStore.putValue(newVal);
-        return Value.create(newVal);
+    async __jsosUpdate(
+        updateFn: AsyncValUpdateFn | SyncValUpdateFn
+    ): Promise<Value> {
+        let newVal = updateFn(this.__jsosObject);
+        if (newVal instanceof Promise) {
+            newVal = await newVal;
+        }
+        return await Value.create(newVal, this.__jsosValueStore);
     }
 
-    async __jsosUpdate(
+    async __jsosUpdateSync(
         updateFn: (currVal: any) => Promise<any>
     ): Promise<Value> {
         const newVal = await updateFn(this.__jsosObject);
-        return Value.create(newVal, this.__jsosValueStore);
+        return await Value.create(newVal, this.__jsosValueStore);
     }
 
-    private constructor(object: any, sha256: string, valueStore: ValueStore) {
+    private constructor(object: any, encodedNormalizedObject: EncodedNormalized, sha256: string, valueStore: ValueStore) {
         // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
         this.__jsosObject = object;
+        this.__jsosEncodedNormalizedObject = encodedNormalizedObject;
         this.__jsosValueStore = valueStore;
         this.__jsosSha256 = sha256;
+        return new Proxy(this, {
+            get: (target, prop, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    return Reflect.get(target, prop, receiver);
+                } else {
+                    return Reflect.get(target.__jsosObject, prop, receiver);
+                }
+            },
+        });
     }
 
     /* Use create pattern since constructor can't be async */
@@ -1464,8 +1482,8 @@ export class Value {
         valueStore?: ValueStore
     ): Promise<Value> => {
         const vStore = valueStore ?? DEFAULT_VALUE_STORE;
-        const [sha256, obj] = await vStore.putValue(object);
-        return new Value(obj, sha256, vStore);
+        const [sha256, encodedNormalizedObj] = await vStore.putValue(object);
+        return new Value(await vStore.getValue(sha256), encodedNormalizedObj, sha256, vStore);
     };
 
     __jsosIsValue(): true {

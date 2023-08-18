@@ -123,11 +123,13 @@ test("VariableStore basics", async () => {
 
 test("Value basics", async () => {
     const init = [1,2,3];
-    const v = await Value.create(init)
+    const v: any = await Value.create(init)
+    expect(v.__jsosObject).toEqual(init);
     expect(v[0]).toBe(1);
     expect(v[2]).toBe(3);
     expect(v.length).toBe(3);
-    expect(v[3]).toBe(4);
+    expect(v[3]).toBe(undefined);
+    expect(v.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4])).toEqual([1,2,3,4]);
 });
 
 //test('Testing normalized put & get of an array', (done) => {
