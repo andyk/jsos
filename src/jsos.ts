@@ -921,6 +921,7 @@ export class InMemoryVariableStore extends VariableStore {
         });
     }
 
+    // returns true if the variable did not exist and was created. Else returns false.
     async newVariable(name: string, namespace: string | null, valueSha256: string): Promise<boolean> {
         const key = _toVarKey(name, namespace);
         return await this.mutex.runExclusive(async () => {
@@ -1418,142 +1419,6 @@ class SupabaseJsonStore extends JsonStore {
     }
 }
 
-const DEFAULT_VALUE_STORE = new ValueStore(
-    new MultiJsonStore([new InMemoryJsonStore()])
-);
-
-export class Value {
-    __jsosValueStore: ValueStore;
-    __jsosSha256: string;
-    __jsosObject: any;
-    __jsosEncodedNormalizedObject: EncodedNormalized;
-
-    async __jsosUpdateIn(
-        indexArray: Array<string | number>,
-        updateFn: (oldObject: any) => any
-    ): Promise<void> {
-        throw Error("Not implemented");
-    }
-
-    __jsosSetIn(
-        indexArray: Array<string | number>,
-        newVal: any
-    ): Promise<Value> {
-        throw Error("Not implemented");
-    }
-
-    async __jsosUpdate(
-        updateFn: AsyncValUpdateFn | SyncValUpdateFn
-    ): Promise<Value> {
-        let newVal = updateFn(this.__jsosObject);
-        if (newVal instanceof Promise) {
-            newVal = await newVal;
-        }
-        return await Value.create(newVal, this.__jsosValueStore);
-    }
-
-    async __jsosUpdateSync(
-        updateFn: (currVal: any) => Promise<any>
-    ): Promise<Value> {
-        const newVal = await updateFn(this.__jsosObject);
-        return await Value.create(newVal, this.__jsosValueStore);
-    }
-
-    private constructor(object: any, encodedNormalizedObject: EncodedNormalized, sha256: string, valueStore: ValueStore) {
-        // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
-        this.__jsosObject = object;
-        this.__jsosEncodedNormalizedObject = encodedNormalizedObject;
-        this.__jsosValueStore = valueStore;
-        this.__jsosSha256 = sha256;
-        return new Proxy(this, {
-            get: (target, prop, receiver) => {
-                if (Reflect.has(target, prop)) {
-                    return Reflect.get(target, prop, receiver);
-                } else {
-                    return Reflect.get(target.__jsosObject, prop, receiver);
-                }
-            },
-        });
-    }
-
-    /* Use create pattern since constructor can't be async */
-    static create = async (
-        object: any,
-        valueStore?: ValueStore
-    ): Promise<Value> => {
-        const vStore = valueStore ?? DEFAULT_VALUE_STORE;
-        const [sha256, encodedNormalizedObj] = await vStore.putValue(object);
-        return new Value(await vStore.getValue(sha256), encodedNormalizedObj, sha256, vStore);
-    };
-
-    __jsosIsValue(): true {
-        return true;
-    }
-}
-
-// A shared mutable object.
-//
-// Wraps any mutable object, auto-captures mutations to that object by
-// creating a new underlying `Value` from the post-mutated object and
-// setting __jsosValue to it.
-//
-// Use cases:
-// 1) shared
-//   a) remote changes are asyncrously pushed automatically to this Variable
-//      causing the underlying Value to be replaced with a new one.
-//   b) manual/explicit syncing done via __jsosPull();
-// c) const - essentially a snapshot of a named Value at a point in time. Can't
-//    be updated. Once a Variable object is set to const, it can't be reverted to
-//    a mutable object. You can however, create a new Variable object from the
-//    same (name, namespace, valueSha256) tuple that is not a const.
-//
-// A Variable is intrinsically shared (via optimistic concurrency control)
-// but you do have control over:
-// 1) who it is shared with (e.g., you can share only with yourself
-//    by using only an in-memory VariableStore)
-// 2) how conflicts are handled (e.g, pull updates and retry)
-//
-// When a variable update fails due to a conflict, an error is thrown. You
-// can catch it, pull updates, and try again.
-//
-// If __jsosUpdateMode is false, then the value is not auto-updated when
-// changes are pushed to __jsosVariableStore for the (__jsosName,
-// __jsosNamespace) key. If it is true, then __jsosValue is
-// updated automatically when changes are pushed to __jsosVariableStore
-// for the (__jsosName, __jsosNamespace) key.
-//
-// The level of sharing is determined by who else has access to
-// __jsosVariableStore. If that is not a shared database, e.g.: if it
-// is an InMemoryStore, then you are only sharing with yourself which should
-// povide sufficient control.
-//
-// We use Optimistic Concurrencey Control, so updates to a variable will
-// thow an error if the variable has been changed in
-// __jsosVariableStore since this variable last pulled updates from it
-// either via subscribing to updates or via calling __jsosPull().
-//
-export interface Variable {
-    __jsosVariableStore: VariableStore;
-    __jsosName: string;
-    __jsosNamespace: string | null;
-    __jsosValue: Value;
-    __jsosParentValue: Value;
-    // If true, this Variable behaves like a named Value by making it immutable.
-    // To make changes one has to update the Variable to make this false.
-    __jsosIsConst: boolean;
-    __jsosSubscribeToUpdates: boolean;
-    // while true, causes local mutations to this variable to fail, though remote
-    // changes can still be pulled in. This is a useful guard against accidental
-    // updates.
-    __jsosIsReadOnly: boolean;
-    // Fetch Value from VariableStore and set __jsosValue to it,
-    // overwriting whaterver value is there. This will throw an error if
-    // __jsosIsConst is true. Pulling updates is useful when
-    // __jsosSubscribeToUpdates is false, in which case it gives you
-    // control over when to sync this Variable to the shared value.
-    __jsosPull(): void;
-}
-
 //class SupabaseVariableStore extends VariableStore {
 //    supabaseClient: SupabaseClient;
 //    variablesTableName: string;
@@ -1713,7 +1578,155 @@ export interface Variable {
 //    };
 //}
 
-export class Variable {
+const DEFAULT_VALUE_STORE = new ValueStore(
+    new MultiJsonStore([new InMemoryJsonStore()])
+);
+
+export class Value {
+    __jsosValueStore: ValueStore;
+    __jsosSha256: string;
+    __jsosObject: any;
+    __jsosEncodedNormalizedObject: EncodedNormalized;
+
+    async __jsosUpdateIn(
+        indexArray: Array<string | number>,
+        updateFn: (oldObject: any) => any
+    ): Promise<void> {
+        throw Error("Not implemented");
+    }
+
+    __jsosSetIn(
+        indexArray: Array<string | number>,
+        newVal: any
+    ): Promise<Value> {
+        throw Error("Not implemented");
+    }
+
+    async __jsosUpdate(
+        updateFn: AsyncValUpdateFn | SyncValUpdateFn
+    ): Promise<Value> {
+        let newVal = updateFn(this.__jsosObject);
+        if (newVal instanceof Promise) {
+            newVal = await newVal;
+        }
+        return await Value.create(newVal, this.__jsosValueStore);
+    }
+
+    async __jsosUpdateSync(
+        updateFn: (currVal: any) => Promise<any>
+    ): Promise<Value> {
+        const newVal = await updateFn(this.__jsosObject);
+        return await Value.create(newVal, this.__jsosValueStore);
+    }
+
+    private constructor(object: any, encodedNormalizedObject: EncodedNormalized, sha256: string, valueStore: ValueStore) {
+        // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
+        this.__jsosObject = object;
+        this.__jsosEncodedNormalizedObject = encodedNormalizedObject;
+        this.__jsosValueStore = valueStore;
+        this.__jsosSha256 = sha256;
+        return new Proxy(this, {
+            get: (target, prop, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    return Reflect.get(target, prop, receiver);
+                } else {
+                    return Reflect.get(target.__jsosObject, prop, receiver);
+                }
+            },
+        });
+    }
+
+    /* Use create pattern since constructor can't be async */
+    static create = async (
+        object: any,
+        valueStore?: ValueStore
+    ): Promise<Value> => {
+        const valStore = valueStore ?? DEFAULT_VALUE_STORE;
+        const [sha256, encodedNormalizedObj] = await valStore.putValue(object);
+        const putVal = await valStore.getValue(sha256)
+        return new Value(putVal, encodedNormalizedObj, sha256, valStore);
+    };
+
+    __jsosEquals(other: Value): boolean {
+        return this.__jsosSha256 === other.__jsosSha256;
+    }
+
+    __jsosIsValue(): true {
+        return true;
+    }
+}
+
+// A shared mutable object.
+//
+// Wraps any mutable object, auto-captures mutations to that object by
+// creating a new underlying `Value` from the post-mutated object and
+// setting __jsosValue to it.
+//
+// Use cases:
+// 1) shared
+//   a) remote changes are asyncrously pushed automatically to this Variable
+//      causing the underlying Value to be replaced with a new one.
+//   b) manual/explicit syncing done via __jsosPull();
+// c) const - essentially a snapshot of a named Value at a point in time. Can't
+//    be updated. Once a Variable object is set to const, it can't be reverted to
+//    a mutable object. You can however, create a new Variable object from the
+//    same (name, namespace, valueSha256) tuple that is not a const.
+//
+// A Variable is intrinsically shared (via optimistic concurrency control)
+// but you do have control over:
+// 1) who it is shared with (e.g., you can share only with yourself
+//    by using only an in-memory VariableStore)
+// 2) how conflicts are handled (e.g, pull updates and retry)
+//
+// When a variable update fails due to a conflict, an error is thrown. You
+// can catch it, pull updates, and try again.
+//
+// If __jsosSubscribeToUpdates is false, then the value is not auto-updated when
+// changes are pushed to __jsosVariableStore for the (__jsosName,
+// __jsosNamespace) key. If it is true, then __jsosValue is
+// updated automatically when changes are pushed to __jsosVariableStore
+// for the (__jsosName, __jsosNamespace) key.
+//
+// The level of sharing is determined by who else has access to
+// __jsosVariableStore. If that is not a shared database, e.g.: if it
+// is an InMemoryStore, then you are only sharing with yourself which should
+// povide sufficient control.
+//
+// TODO MAYBE: support different levels of sharing at the VariableStore level.
+// CRUD operations could be separated out, e.g.: allow sharing read-only access.
+//
+// We use Optimistic Concurrency Control, so updates to a variable will
+// thow an error if the variable has been changed in
+// __jsosVariableStore since this variable last pulled updates from it
+// either via subscribing to updates or via calling __jsosPull().
+//
+export interface VariableWrapper {
+    __jsosVariableStore: VariableStore;
+    __jsosName: string;
+    __jsosNamespace: string | null;
+    __jsosValue: Value;
+    __jsosParentValue?: Value;
+    // If true, this Variable behaves like a named Value by making it immutable.
+    // To make changes one has to update the Variable to make this false.
+    // Note that this does *not* make the variable immutable in the VariableStore,
+    // just immutable via this Variable object.
+    __jsosIsConst: boolean;
+    __jsosSubscribeToUpdates: boolean;
+    // while true, causes local mutations to this variable to fail, though remote
+    // changes can still be pulled in. This is a useful guard against accidental
+    // updates.
+    __jsosIsReadOnly: boolean;
+    // Fetch Value from VariableStore and set __jsosValue to it,
+    // overwriting whaterver value is there. This will throw an error if
+    // __jsosIsConst is true. Pulling updates is useful when
+    // __jsosSubscribeToUpdates is false, in which case it gives you
+    // control over when to sync this Variable to the shared value.
+    __jsosPull(): void;
+}
+
+export const DEFAULT_VARIABLE_STORE = new InMemoryVariableStore();
+
+export class VariableWrapper {
     /*
        A Variable has a name, optionally a namespace, and the address (i.e., sha256) of a Value.
         A variable can be updated to refer to a different Value. This is done via an atomic
@@ -1724,30 +1737,111 @@ export class Variable {
     __jsosName: string;
     __jsosNamespace: string | null;
     __jsosValue: Value;
-    __jsosParentValue: Value;
-    //__jsosSubscribeToUpdates: boolean;
+    __jsosParentValue?: Value;
+    __jsosSubscribeToUpdates: boolean;
 
     constructor(
-        variableStore: VariableStore,
         name: string,
         namespace: string | null = null,
         value: Value,
-        parentValue: Value
+        variableStore: VariableStore,
+        subscribeToUpdates: boolean,
+        parentValue?: Value
     ) {
         this.__jsosVariableStore = variableStore;
         this.__jsosName = name;
         this.__jsosNamespace = namespace;
         this.__jsosValue = value;
+        this.__jsosSubscribeToUpdates = subscribeToUpdates;
         this.__jsosParentValue = parentValue;
+    }
+
+    equals(other: VariableWrapper) {
+        return (
+            this.__jsosName === other.__jsosName &&
+            this.__jsosNamespace === other.__jsosNamespace &&
+            this.__jsosValue.__jsosEquals(other.__jsosValue)
+        );
     }
 }
 
-//    static create = async (
-//        jsosClient: JsosClient,
-//        name: string,
-//        namespace: string | null = null,
-//        subscribeToSupabase: boolean = true
-//    ): Promise<Variable> => {
+export class Variable {
+    // Create a new Variable object.  If value is a `Value` object, then this
+    // just directly uses its sha256.  Else this calls `Value.create(value)`
+    // which creates a new Value in the ValueStore and then uses its sha256 for
+    // the Variable.  Throws error if the Variable already exists in the
+    // VariableStore or if a Value is provided that has a
+    static create = async (
+        name: string,
+        value: any,
+        namespace: string | null = null,
+        valueStore?: ValueStore,
+        variableStore?: VariableStore,
+        subscribeToUpdates: boolean = true
+    ): Promise<VariableWrapper> => {
+        const valStore = valueStore ?? DEFAULT_VALUE_STORE;
+        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
+        let forSureAValue: Value;
+        if (value instanceof Value) {
+            console.log("already a Value");
+            forSureAValue = value;
+        } else {
+            forSureAValue = await Value.create(value, valueStore);
+            console.log("turned non-Value into Value");
+        }
+        const newVarRes = varStore.newVariable(name, namespace, forSureAValue.__jsosSha256);
+        if (!newVarRes) {
+            if (await varStore.getVariable(name, namespace)) {
+                throw Error(`Variable ${name} already exists in VariableStore`);
+            }
+            throw Error("Failed to create new variable in VariableStore");
+        }
+        return new VariableWrapper(name, namespace, forSureAValue, varStore, subscribeToUpdates);
+    }
+
+    // returns undefined if the Variable does not exist in the VariableStore.
+    static get = async (
+        name: string,
+        namespace: string | null = null,
+        valueStore?: ValueStore,
+        variableStore?: VariableStore,
+        subscribeToUpdates: boolean = true
+    ): Promise<VariableWrapper | undefined> => {
+        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
+        console.log()
+        const valueSha256 = await varStore.getVariable(name, namespace)
+        if (valueSha256 === undefined) {
+            return undefined;
+        };
+        const val = await Value.create(valueSha256, valueStore)
+        return new VariableWrapper(name, namespace, val, varStore, subscribeToUpdates)
+    }
+
+    static fromValue = async (
+        name: string,
+        value: Value,
+        namespace: string | null = null,
+        variableStore?: VariableStore,
+        subscribeToUpdates: boolean = true
+    ): Promise<VariableWrapper> => {
+        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
+        return new VariableWrapper(name, namespace, value, varStore, subscribeToUpdates);
+    }
+
+    /*static getOrCreate = async (
+        name: string,
+        namespace: string | null = null,
+        defaultValue: any,
+        valueStore?: ValueStore,
+        variableStore?: VariableStore,
+    ) => {
+        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
+        const val = await Variable.get(name, namespace, valueStore, varStore);
+        FINISH ME
+    }
+    */
+}
+
 //        /* If this variable exists already, fetch & return it. Else create it and
 //         * initialize it to wrap Value(null) */
 //        const sha256 = await jsosClient.getSha256FromVariable(name, namespace);

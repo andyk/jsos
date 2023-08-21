@@ -1,10 +1,10 @@
 import React, { useEffect } from 'react';
-import jsos, { Variable, Value } from './jsos';
+import jsos, { VariableWrapper, Value } from './jsos';
 
 export const DataContext = React.createContext<Array<Value|Function|null>>([]);
 
 export default function JsosContextProvider({ children, name, namespace }) {
-    const [jsosVar, setJsosVar] = React.useState<null | Variable >(null);
+    const [jsosVar, setJsosVar] = React.useState<null | VariableWrapper >(null);
     const [appData, setAppData] = React.useState<{[key: string]: null | Value}>({ pObject: null });
 
     function varChanged(newObj, newSha1) {

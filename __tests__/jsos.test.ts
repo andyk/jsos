@@ -7,6 +7,7 @@ import {
     VariableUpdateCallback,
     Value,
     Variable,
+    DEFAULT_VARIABLE_STORE,
 } from "../src/jsos";
 import {
     OrderedMap,
@@ -129,7 +130,21 @@ test("Value basics", async () => {
     expect(v[2]).toBe(3);
     expect(v.length).toBe(3);
     expect(v[3]).toBe(undefined);
-    expect(v.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4])).toEqual([1,2,3,4]);
+    const updated = await v.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4]);
+    expect(updated.__jsosObject).toEqual([1,2,3,4]);
+    expect(v.__jsosSha256).not.toBe(updated.__jsosSha256);
+});
+
+test("Variable basics", async () => {
+    const def = DEFAULT_VARIABLE_STORE
+    const init = [1,2,3];
+    const v: any = await Variable.create("myVar", init);
+    const v3: any = await Variable.get("myVar2");
+    expect(v3).toBeDefined();
+    expect(v.equals(v3)).toBe(true);
+    const v2: any = await Variable.fromValue(
+        "name2", await Value.create({a: 1, b: 2})
+    );
 });
 
 //test('Testing normalized put & get of an array', (done) => {
