@@ -1,12 +1,17 @@
 import { jest } from "@jest/globals";
 import _ from "lodash";
 import {
-    ValueStore,
+    ValStore,
     InMemoryJsonStore,
-    InMemoryVariableStore,
-    VariableUpdateCallback,
-    Value,
-    Variable,
+    InMemoryVarStore,
+    VarUpdateCallback,
+    Val,
+    NewVal,
+    ValFromSha256,
+    NewVar,
+    GetVar,
+    GetVarFromVal,
+    Var,
     DEFAULT_VARIABLE_STORE,
 } from "../src/jsos";
 import {
@@ -18,7 +23,7 @@ import {
 
 //tmp.setGracefulCleanup();
 
-test("Basic ObjectStore and ValueStore operations.", async () => {
+test("Basic ObjectStore and ValStore operations.", async () => {
     const orig = [
         [2, 22],
         [1, 11],
@@ -28,13 +33,13 @@ test("Basic ObjectStore and ValueStore operations.", async () => {
     const key = await js.putJson(orig);
     const gotJson = await js.getJson(key);
     expect(orig).toEqual(gotJson);
-    const vs = new ValueStore(js);
+    const vs = new ValStore(js);
     const encoded = vs.encode(orig);
     const normalized = vs.normalize(encoded);
     expect(normalized.length).toBe(10);
 
-    const putVal = await vs.putValue(orig);
-    const gotVal = await vs.getValue(putVal[0]);
+    const putVal = await vs.putVal(orig);
+    const gotVal = await vs.getVal(putVal[0]);
     expect(orig).toEqual(gotVal);
 });
 
@@ -49,49 +54,49 @@ test("Test valuestore with immutable types", async () => {
     // TODO support undefined too
     //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
     const os = new InMemoryJsonStore();
-    const vs = new ValueStore(os);
-    const [putSha256, _] = await vs.putValue(om);
-    const gotVal = await vs.getValue(putSha256);
+    const vs = new ValStore(os);
+    const [putSha256, _] = await vs.putVal(om);
+    const gotVal = await vs.getVal(putSha256);
     expect(om).toEqual(gotVal);
 });
 
 test("encodeNormalized and decodeNormalized.", async () => {
     const js = new InMemoryJsonStore();
-    const vs = new ValueStore(js);
+    const vs = new ValStore(js);
     const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
     expect(encodedNorm[1].manifest[0]).toBe("key1");
 });
 
-test("VariableStore basics", async () => {
-    const varStore = new InMemoryVariableStore();
+test("VarStore basics", async () => {
+    const varStore = new InMemoryVarStore();
     expect(
-        await varStore.newVariable("name", "namespace", "exampleSha256")
+        await varStore.newVar("name", "namespace", "exampleSha256")
     ).toBe(true);
     expect(
-        await varStore.newVariable("name", "namespace", "exampleSha256")
+        await varStore.newVar("name", "namespace", "exampleSha256")
     ).toBe(false);
-    expect(await varStore.getVariable("name", "namespace")).toBe(
+    expect(await varStore.getVar("name", "namespace")).toBe(
         "exampleSha256"
     );
     expect(
-        await varStore.updateVariable(
+        await varStore.updateVar(
             "name",
             "namespace",
             "exampleSha256",
             "newSha256"
         )
     ).toBe(true);
-    expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
+    expect(await varStore.getVar("name", "namespace")).toBe("newSha256");
     expect(
-        await varStore.updateVariable(
+        await varStore.updateVar(
             "name",
             "namespace",
             "wrongCurrentSha256",
             "newSha256"
         )
     ).toBe(false);
-    expect(await varStore.getVariable("name", "namespace")).toBe("newSha256");
-    const callBack: VariableUpdateCallback = jest.fn(
+    expect(await varStore.getVar("name", "namespace")).toBe("newSha256");
+    const callBack: VarUpdateCallback = jest.fn(
         (n, ns, oldSha256, newSha256) => {
             expect(n).toBe("name");
             expect(ns).toBe("namespace");
@@ -102,7 +107,7 @@ test("VariableStore basics", async () => {
     const subscrID = varStore.subscribeToUpdate("name", "namespace", callBack);
     expect(callBack).toBeCalledTimes(0);
     expect(
-        await varStore.updateVariable(
+        await varStore.updateVar(
             "name",
             "namespace",
             "newSha256",
@@ -112,7 +117,7 @@ test("VariableStore basics", async () => {
     expect(callBack).toBeCalledTimes(1);
     expect(varStore.unsubscribeFromUpdate(subscrID)).toBe(true);
     expect(
-        await varStore.updateVariable(
+        await varStore.updateVar(
             "name",
             "namespace",
             "newerSha256",
@@ -122,9 +127,9 @@ test("VariableStore basics", async () => {
     expect(callBack).toBeCalledTimes(1);
 });
 
-test("Value basics", async () => {
+test("Val basics", async () => {
     const init = [1,2,3];
-    const v: any = await Value.create(init)
+    const v: any = await NewVal(init);
     expect(v.__jsosObject).toEqual(init);
     expect(v[0]).toBe(1);
     expect(v[2]).toBe(3);
@@ -133,25 +138,45 @@ test("Value basics", async () => {
     const updated = await v.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4]);
     expect(updated.__jsosObject).toEqual([1,2,3,4]);
     expect(v.__jsosSha256).not.toBe(updated.__jsosSha256);
+
+    const aStr = "a string";
+    const strVal: any = await NewVal(aStr);
+    const newStr = await strVal.__jsosUpdate((oldVal: string) => oldVal + " with more");
+    expect(newStr.__jsosObject).toBe("a string with more");
+
+    const aBool = true;
+    const boolVal: any = await NewVal(aBool);
+    const newBool = await boolVal.__jsosUpdate((oldVal: boolean) => oldVal && false);
+    expect (newBool.__jsosObject).toBe(false);
 });
 
-test("Variable basics", async () => {
-    const def = DEFAULT_VARIABLE_STORE
+test("Var basics", async () => {
     const init = [1,2,3];
-    const v: any = await Variable.create("myVar", init);
-    const v3: any = await Variable.get("myVar2");
-    expect(v3).toBeDefined();
-    expect(v.equals(v3)).toBe(true);
-    const v2: any = await Variable.fromValue(
-        "name2", await Value.create({a: 1, b: 2})
+    const v: any = await NewVar("myVar", init);
+    //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
+    const v2: any = await GetVar("myVar");
+    expect(v2).toBeDefined();
+    expect(v.__jsosEquals(v2)).toBe(true);
+    const v3: any = await GetVarFromVal(
+        "name2", await NewVal([1,2,3])
     );
+    expect(v.__jsosSha256).toEqual(v3.__jsosSha256);
+    expect(v[0]).toBe(1);
+    v[3] = 4;
+    expect(v[3]).toBe(4);
+    //TODO: add a sleep or block until the Var update callback is called
+    function sleep(ms: number) {
+        return new Promise(resolve => setTimeout(resolve, ms));
+    }
+    await sleep(1000)
+    expect(v2.length).toBe(4);
 });
 
 //test('Testing normalized put & get of an array', (done) => {
 //    async function test() {
 //        const orig = [[2, 22], [1, 11], ["a", "aa"]];
-//        const putted = await jsos.putValue(orig);
-//        const gotted = await jsos.getPlainValue(getSha1(putted));
+//        const putted = await jsos.putVal(orig);
+//        const gotted = await jsos.getPlainVal(getSha1(putted));
 //        assert(
 //            _.isEqual(orig, gotted),
 //            "putJson and getJson are not inverses for a js Array<Array>: " +
@@ -167,10 +192,10 @@ test("Variable basics", async () => {
 //
 //test('Testing null put & get', (done) => {
 //    (async () => {
-//        await jsos.putValue(null);
-//        const getNull = await jsos.getValue(getSha1(null)); // use cache
+//        await jsos.putVal(null);
+//        const getNull = await jsos.getVal(getSha1(null)); // use cache
 //        assert(getNull === null, "put and get null doesn't work.");
-//        const getNullIgnoreCache = await jsos.getValue(getSha1(null), true, false); // ignore cache
+//        const getNullIgnoreCache = await jsos.getVal(getSha1(null), true, false); // ignore cache
 //        assert(getNullIgnoreCache === null, "put and get null doesn't work when ignoring cache.");
 //        done();
 //    })();
@@ -179,8 +204,8 @@ test("Variable basics", async () => {
 //test('Testing normalized plain object put', (done) => {
 //    (async () => {
 //        const origObj = {a: "aa", b: "bb"}
-//        const puttedObj = await jsos.putValue(origObj);
-//        const gottedObj = await jsos.getValue(getSha1(puttedObj));
+//        const puttedObj = await jsos.putVal(origObj);
+//        const gottedObj = await jsos.getVal(getSha1(puttedObj));
 //        assert(
 //            _.isEqual(origObj, gottedObj),
 //            "putJson and getJson are not inverses for a JS object: " +
@@ -195,8 +220,8 @@ test("Variable basics", async () => {
 //test('Test non-normalized object storage', (done) => {
 //    (async () => {
 //        const orig = [[2, 22], [1, 11], ["a", "aa"]];
-//        const notNormalized = await jsos.putValue(orig, false);
-//        const gotNotNormalized = await jsos.getValue(
+//        const notNormalized = await jsos.putVal(orig, false);
+//        const gotNotNormalized = await jsos.getVal(
 //            getSha1(notNormalized),
 //            false
 //        );
@@ -213,10 +238,10 @@ test("Variable basics", async () => {
 //    })();
 //}, 20000);
 //
-//test('Testing Value', (done) => {
+//test('Testing Val', (done) => {
 //    (async () => {
 //        const obj = await jsos.value({ a: "aa", b: true, c: [1, "2"], d: { e: ["f", 3, "4"] } });
-//        const gotObj = await jsos.getValue(obj.sha1);
+//        const gotObj = await jsos.getVal(obj.sha1);
 //        assert(_.isEqual(obj, gotObj), "object put and get were not inverses: " + JSON.stringify(obj) + ", " + JSON.stringify(gotObj));
 //
 //        // gotObj.set("g", "gg");
@@ -283,24 +308,24 @@ test("Variable basics", async () => {
 //    })();
 // });
 //
-//test('Testing Variable operations', (done) => {
+//test('Testing Var operations', (done) => {
 //    (async () => {
 //        //http://stackoverflow.com/questions/105034/how-to-create-a-guid-uuid-in-javascript
 //        const randStr = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
 //        const variable = await jsos.variable(randStr);
-//        assert(variable.subscribed(), "Variable did not subscribe to supabase.");
+//        assert(variable.subscribed(), "Var did not subscribe to supabase.");
 //        let shouldBeNull = await variable.get();
 //        assert(shouldBeNull.object === null, "variable get for null value failed");
 //        await variable.set(["a string"]);
 //        const gotVar = await variable.get();
-//        assert(_.isEqual(gotVar.object, ["a string"]), "Variable.set() did not work.");
+//        assert(_.isEqual(gotVar.object, ["a string"]), "Var.set() did not work.");
 //        await variable.update(oldVal => {
 //            return [...(oldVal as Array<string>), "another string"]
 //        });
 //        const gotAgain = await variable.get();
-//        assert(_.isEqual(gotAgain.object, ["a string", "another string"]), "Variable.update() did not work.");
+//        assert(_.isEqual(gotAgain.object, ["a string", "another string"]), "Var.update() did not work.");
 //        await variable.unsubscribeFromSupabase();
-//        assert(!variable.subscribed(), "Variable.unsubscribeFromSupabase() did not work.");
+//        assert(!variable.subscribed(), "Var.unsubscribeFromSupabase() did not work.");
 //        //Sleep to give supabase time to cleanup the websocket connection
 //        function sleep(ms: number) {
 //            return new Promise(resolve => setTimeout(resolve, ms));

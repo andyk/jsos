@@ -1,3 +1,4 @@
+/// <reference path="./idb-keyval.d.ts" />
 import { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
 import {
     Collection,
@@ -18,25 +19,20 @@ import { Mutex } from "async-mutex";
 import _ from "lodash";
 import { createStore, get, set, del } from "idb-keyval/dist/index.cjs";
 
-// WARNING: probably want be very careful what we use the referenceCache for
-// since references are shared and mutable so cached values of them
-// are likely to be come stale & incorrect. We may want to get rid of the
-// referenceCache entirely.
-
 /*
 =============================================================
 =================== JSOS - Key Abstractions =================
 =============================================================
 
-== JValue ==
+== JVal ==
 The type of objects that this library handles: including aribrarily nested 
 arrangements of any Json types or Immutable.Collections
 
 == getSha256() ==
-returns the hash of an object, which is always used as an address in ValueStores
+returns the hash of an object, which is always used as an address in ValStores
 
 == JsonStore ==
-Represents the lowest layer backing store for Values. Provides low-level
+Represents the lowest layer backing store for Vals. Provides low-level
 functions to store and retrieve JSON from a backing store. The backing store
 could be an RDBMS, a document store, a file, an in-memory data structure, etc.
 Objects are stored with the hash value of the JSON as the key. JsonStores do not
@@ -47,33 +43,33 @@ storage engine that uses a non-JSON format for the actual underlying storage
 sha256 hash of the JSON representation of the object that is passed into the
 JsonStore.
 
-== ValueStore ==
-A ValueStore wraps an array of JsonStores to make them more user friendly by...
+== ValStore ==
+A ValStore wraps an array of JsonStores to make them more user friendly by...
     1) allowing more types to be stored than just JSON (via an Encoder)
     2) it may also decide to break a single object into more than one object in
        the underlying JsonStore (e.g., to normalize the object).
-Thus, a ValueStore has a JsonStore member, an EncoderDecoder member, and
-methods for getting and putting Values.
+Thus, a ValStore has a JsonStore member, an EncoderDecoder member, and
+methods for getting and putting Vals.
 
-== VariableStore ==
+== VarStore ==
 A data store that provides transactional key-value access using optimistic
 concurrency control. Key is (name: string, namespace: string | null), value
-is the hash of a Value. A VariableStore is associated with exactly one ValueStore
-which is where a Variable's hash can be used to fetch the object that the
-Variable currently refers to.
+is the hash of a Val. A VarStore is associated with exactly one ValStore
+which is where a Var's hash can be used to fetch the object that the
+Var currently refers to.
 
-== Value ==
-Immutable abstration with persistence. Wraps a JValue (i.e., primitives and/or
+== Val ==
+Immutable abstration with persistence. Wraps a JVal (i.e., primitives and/or
 Immutables.Collections)
 For v0: we use toJS() and fromJS() to convert between Immutable and JS objects
         which throws means any Map and Array types are converted to Immutable.Map
         and Immutable.List types respectively and the original mix of plain JS
         List and Map types are lost.
 
-== Variable ==
-A shared mutable named reference to a Value. This is essentially a
+== Var ==
+A shared mutable named reference to a Val. This is essentially a
 (name: string, namespace: string | null, sha256: string) tuple and some helper functions
-for updating & syncing that tuple with the database. As the Variable is updated,
+for updating & syncing that tuple with the database. As the Var is updated,
 the reference is updated in the database.
 */
 
@@ -90,7 +86,7 @@ type EncodedNormalized = [
     string,
     { objectSha256: string; manifest: Array<string> }
 ];
-export type VariableUpdateCallback = (
+export type VarUpdateCallback = (
     name: string,
     namespace: string | null,
     oldSha256: string | null,
@@ -102,13 +98,13 @@ type AsyncValUpdateFn = (old: any) => Promise<any>;
 const LOCKFILE_OPTIONS = { retries: 10 };
 const OBJECT_STORE_NAME = "JsosJsonStore";
 const OBJECT_STORE_FILE_PATH = `./${OBJECT_STORE_NAME}.json`;
-const VARIABLE_STORE_PATH = "JsosVariableStore";
+const VARIABLE_STORE_PATH = "JsosVarStore";
 const VARIABLE_STORE_FILE_PATH = `./${VARIABLE_STORE_PATH}.json`;
 const VALUE_REF_PREFIX = "~#jVal:";
 const VARIABLE_STR_KEY_PREFIX = "~#jVar";
 const STR_KEY_SEP = "~#~#~";
 const DEFAULT_OBJECTS_TABLE_NAME = "jsos_objects";
-const DEFAULT_VARIABLES_TABLE_NAME = "jsos_variables";
+const DEFAULT_VARIABLES_TABLE_NAME = "jsos_vars";
 
 // Re-using special strings for encoding immutables from
 // https://github.com/glenjamin/transit-immutable-js
@@ -128,33 +124,33 @@ const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
 
-function isPrimitive(value: any): value is Primitive {
+function isPrimitive(val: any): val is Primitive {
     return (
-        typeof value === "string" ||
-        typeof value === "number" ||
-        typeof value === "boolean" ||
-        value === null
+        typeof val === "string" ||
+        typeof val === "number" ||
+        typeof val === "boolean" ||
+        val === null
     );
 }
 
-function isPrimitiveArray(value: any): value is Primitive[] {
-    return Array.isArray(value) && value.every(isPrimitive);
+function isPrimitiveArray(val: any): val is Primitive[] {
+    return Array.isArray(val) && val.every(isPrimitive);
 }
 
 function isNormalizedJsonObject(
-    value: any
-): value is { [key: string]: Primitive } {
-    if (typeof value !== "object" || value === null || Array.isArray(value))
+    val: any
+): val is { [key: string]: Primitive } {
+    if (typeof val !== "object" || val === null || Array.isArray(val))
         return false;
 
-    return Object.values(value).every(isPrimitive);
+    return Object.values(val).every(isPrimitive);
 }
 
-function isNormalizedJson(value: any): value is NormalizedJson {
+function isNormalizedJson(val: any): val is NormalizedJson {
     return (
-        isPrimitive(value) ||
-        isPrimitiveArray(value) ||
-        isNormalizedJsonObject(value)
+        isPrimitive(val) ||
+        isPrimitiveArray(val) ||
+        isNormalizedJsonObject(val)
     );
 }
 
@@ -198,10 +194,10 @@ function _sha265FromValRef(ref: string): string {
 
 function _toVarKey(name: string, namespace: string | null) {
     if (name.includes(STR_KEY_SEP)) {
-        throw new Error(`Variable name cannot contain ${STR_KEY_SEP}`);
+        throw new Error(`Var name cannot contain ${STR_KEY_SEP}`);
     }
     if (namespace?.includes(STR_KEY_SEP)) {
-        throw new Error(`Variable namespace cannot contain ${STR_KEY_SEP}`);
+        throw new Error(`Var namespace cannot contain ${STR_KEY_SEP}`);
     }
     return `${VARIABLE_STR_KEY_PREFIX}${STR_KEY_SEP}${name}${STR_KEY_SEP}${
         namespace || ""
@@ -211,19 +207,19 @@ function _toVarKey(name: string, namespace: string | null) {
 // Key of VALUE_STR_KEY_PREFIX and nothing else is
 function _fromVarKey(key: string | null) {
     if (typeof key !== "string") {
-        throw new Error(`Invalid variable key: ${key}`);
+        throw new Error(`Invalid var key: ${key}`);
     }
     const [prefix, name, namespace] = key.split(STR_KEY_SEP);
     if (prefix !== VARIABLE_STR_KEY_PREFIX || !name) {
-        throw new Error(`Invalid variable key: ${key}`);
+        throw new Error(`Invalid var key: ${key}`);
     }
     return { name, namespace: namespace || null };
 }
 
-// A key-value store for storing plain objects using sha256 as key. Can be backed
+// A key-val store for storing plain objects using sha256 as key. Can be backed
 // by in-memory, file-system, browser Local Storage or IndexedDB, server-based.
 abstract class JsonStore {
-    // Test if value with provided sha256 exists in this store.
+    // Test if val with provided sha256 exists in this store.
     abstract hasJson(sha256: string): Promise<boolean>;
 
     // Fetch a Json object from the object store using it's sha256 as the key.
@@ -243,8 +239,8 @@ abstract class JsonStore {
         sha256Array: Array<string>
     ): Promise<Map<string, Json | undefined>> {
         const promises = sha256Array.map(async (sha256) => {
-            const value = await this.getJson(sha256);
-            const tuple: [string, Json | undefined] = [sha256, value];
+            const val = await this.getJson(sha256);
+            const tuple: [string, Json | undefined] = [sha256, val];
             return tuple;
         });
         const results = await Promise.all(promises);
@@ -283,9 +279,7 @@ class MultiJsonStore extends JsonStore {
 
     constructor(jsonStores: Array<JsonStore>) {
         if (jsonStores.length === 0) {
-            throw new Error(
-                "MultiJsonStore must have at least one JsonStore"
-            );
+            throw new Error("MultiJsonStore must have at least one JsonStore");
         }
         super();
         this.jsonStores = jsonStores;
@@ -314,7 +308,7 @@ class MultiJsonStore extends JsonStore {
         results.reduce((prev, curr) => {
             if (prev !== curr) {
                 throw new Error(
-                    "Two ValueStores returned different results when putting the same object."
+                    "Two ValStores returned different results when putting the same object."
                 );
             }
             return curr;
@@ -331,10 +325,10 @@ class MultiJsonStore extends JsonStore {
 }
 
 /*
- * A ValueStore is a key-value store for encoding->normalizing->storing or
+ * A ValStore is a key-val store for encoding->normalizing->storing or
  * retrieving->denormalizing->decoding immutable Javascript objects to/from
  * undelying JsonStores.  An JsonStore puts and gets JSON objects. A
- * ValueStore is one layer higher in abstraction than an JsonStore and is
+ * ValStore is one layer higher in abstraction than an JsonStore and is
  * responsible for transforming an object of any type into normalized JSON
  * before it is put into the JsonStore and then performing the inverse
  * transformation (as much as possible) when it is subsequently retrieved.  This
@@ -348,18 +342,18 @@ class MultiJsonStore extends JsonStore {
  *   decode(Json): any
  *   normalize(Json): Array<NormalizedJson>  // breaks 1 object into >=1, returns outer-most object last
  *   denormalize(Array<[string, NormalizedJson]>): Promise<Json> // sub-objects must have been fetched already
- *   getValue(sha256: string): Promise<any>
- *   putValue(any): Promise<[string, EncodedNormalized]> // wraps normalizeDecodeAndPutValue() and returns just the outermost encoded normalized object and sha256 of it
- *   normalizeDecodePutValue(any): Promise<Array<[string, Json]>>  // returns list of key/values put, outer-most object last. `putValue()` wraps this.
+ *   getVal(sha256: string): Promise<any>
+ *   putVal(any): Promise<[string, EncodedNormalized]> // wraps normalizeDecodeAndPutVal() and returns just the outermost encoded normalized object and sha256 of it
+ *   normalizeDecodePutVal(any): Promise<Array<[string, Json]>>  // returns list of key/vals put, outer-most object last. `putVal()` wraps this.
  *
- * Essentially: putValue(obj) = return putJson(encodeNormalized(normalize(encode(obj))))
- *              getValue(sha256) = return decode(denormalize(decodeNormalized(getJson(sha256))))
+ * Essentially: putVal(obj) = return putJson(encodeNormalized(normalize(encode(obj))))
+ *              getVal(sha256) = return decode(denormalize(decodeNormalized(getJson(sha256))))
  *
  * We encode some types that that JSON doesn't handle natively -- such as Map,
  * Set, Date, UUID, and immutables-js Collections -- using the format:
  *    [<special_string>, <well_known_format>].
  */
-export class ValueStore {
+export class ValStore {
     jsonStore: JsonStore;
 
     constructor(jsonStore: JsonStore) {
@@ -371,7 +365,7 @@ export class ValueStore {
     // b) normalizes the object into one or more "normalized objects",
     // c) encodes the fact that this is a normalized object
     // d) puts all of the normalized objects and associated sub-objects to this
-    //    ValueStore's JsonStore
+    //    ValStore's JsonStore
     //
     // A normalized object is always flat (never nested) because all objects are
     // stored separately in the object store and referenced by sha256.
@@ -391,7 +385,7 @@ export class ValueStore {
     //                  "sha256_0", "sha256_1", ..., "sha256_5"
     //             ]}]
     //
-    // And then the return value of putValue() would be:
+    // And then the return val of putVal() would be:
     //   Promise<{
     //     sha256: "sha256_6",
     //     object: [
@@ -402,8 +396,8 @@ export class ValueStore {
     //       }
     //     ]
     //   }>
-    async putValue(object: any): Promise<[string, EncodedNormalized]> {
-        const putNormalized = await this.encodeNormalizePutValue(object);
+    async putVal(object: any): Promise<[string, EncodedNormalized]> {
+        const putNormalized = await this.encodeNormalizePutVal(object);
         const encodedNormalized = this.encodeNormalized(
             putNormalized.map((pair) => pair[0])
         );
@@ -412,14 +406,14 @@ export class ValueStore {
         );
         if (putNormalized.length === 0) {
             throw new Error(
-                "normalizeEncodePutValue() returned 0 objects but should have returned >0."
+                "normalizeEncodePutVal() returned 0 objects but should have returned >0."
             );
         }
         return [encodedNormalizedSha256, encodedNormalized];
     }
 
     // Outer-most normalized object is last in the returned array.
-    async encodeNormalizePutValue(
+    async encodeNormalizePutVal(
         object: any
     ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
@@ -442,15 +436,15 @@ export class ValueStore {
     // TODO: combine all parallel underlying calls to putJsons() into a single
     // call to putJsons() to improve performance via batching of any potential
     // underlying network calls.
-    async putValues(objects: Array<any>): Promise<Array<[string, Json]>> {
+    async putVals(objects: Array<any>): Promise<Array<[string, Json]>> {
         return await Promise.all(
-            objects.map(async (object) => await this.putValue(object))
+            objects.map(async (object) => await this.putVal(object))
         );
     }
 
     // Throws an error if the object is not encoded and normalized.  If you
     // fetch an object regardless of its type, use JsonStore.getJson()
-    async getValue(sha256: string): Promise<any> {
+    async getVal(sha256: string): Promise<any> {
         const encodedNormalized = await this.jsonStore.getJson(sha256);
         if (!isEncodedNormalized(encodedNormalized)) {
             throw new Error(
@@ -462,20 +456,20 @@ export class ValueStore {
         return this.decode(denormalized);
     }
 
-    async getValues(sha256array: Array<string>): Promise<Array<any>> {
+    async getVals(sha256array: Array<string>): Promise<Array<any>> {
         return await Promise.all(
-            sha256array.map(async (sha256) => await this.getValue(sha256))
+            sha256array.map(async (sha256) => await this.getVal(sha256))
         );
     }
 
-    async getValueEntries(
+    async getValEntries(
         sha256array: Array<string>
     ): Promise<Map<string, any>> {
         const tuples = Promise.all(
             sha256array.map(async (sha256) => {
                 const tuple: [string, any] = [
                     sha256,
-                    await this.getValue(sha256),
+                    await this.getVal(sha256),
                 ];
                 return tuple;
             })
@@ -483,16 +477,16 @@ export class ValueStore {
         return new Map(await tuples);
     }
 
-    // Note that deleting a value does not delete any values that it references.
+    // Note that deleting a val does not delete any vals that it references.
     // Supporting this functionality will require some thought since other normalized
-    // values might also reference [some of] the same nested values as the value
+    // vals might also reference [some of] the same nested vals as the val
     // being deleted. We would have to maintain a reverse index of all normalized
     // objects to support viral/cascading deletes.
-    async deleteValue(sha256: string): Promise<void> {
+    async deleteVal(sha256: string): Promise<void> {
         await this.jsonStore.deleteJson(sha256);
     }
 
-    async deleteValues(sha256Array: Array<string>): Promise<void> {
+    async deleteVals(sha256Array: Array<string>): Promise<void> {
         await this.jsonStore.deleteJsons(sha256Array);
     }
 
@@ -543,7 +537,7 @@ export class ValueStore {
                 decodedObj[k] = this.recursiveDecode(object[k]);
             }
         }
-       return this.shallowDecode(decodedObj);
+        return this.shallowDecode(decodedObj);
     }
 
     // Returns a copy of `object` that has been encoded.
@@ -559,10 +553,13 @@ export class ValueStore {
             return [DATE_KEY, object.toISOString()];
         }
         if (object instanceof RegExp) {
-            return [REGEXP_KEY, {
-                source: object.source,
-                flags: object.flags
-            }];
+            return [
+                REGEXP_KEY,
+                {
+                    source: object.source,
+                    flags: object.flags,
+                },
+            ];
         }
         if (object instanceof Map) {
             return [BUILTIN_MAP_KEY, Array.from(object)];
@@ -660,8 +657,9 @@ export class ValueStore {
         if (!isPrimitive(object)) {
             throw Error(
                 "shallowDecode can only handle things with typeof " +
-                    "string, number, boolean, null, Date, RegExp, " + 
-                    "or object (including array). Received: " + object
+                    "string, number, boolean, null, Date, RegExp, " +
+                    "or object (including array). Received: " +
+                    object
             );
         }
         return object;
@@ -682,7 +680,7 @@ export class ValueStore {
     // into the normalized object (and the record of their having come from the
     // prototype chain is lost).
     //
-    // The last element of the return value is the outermost one, i.e. the root
+    // The last element of the return val is the outermost one, i.e. the root
     // of the DAG.
     normalize(object: Json): Array<NormalizedJson> {
         const objAccumulator: Array<NormalizedJson> = [];
@@ -762,7 +760,7 @@ export class ValueStore {
     // Also assumes (but does not check or enforce) that all objects with addresses provided
     // in the input array are normalized.
     //
-    // NOTE: the sha256 of the root object/value is included in the manifest and
+    // NOTE: the sha256 of the root object/val is included in the manifest and
     // also returned as the `objectSha256` property for convenience.
     encodeNormalized(normalizedSha256s: Array<string>): EncodedNormalized {
         return [
@@ -806,73 +804,73 @@ export class ValueStore {
     }
 }
 
-// A key-value store for storing/sharing/updating potentially mutable tuples
-// (name, namespace, valueSha256, parentSha256, metaDataSha256). The
+// A key-val store for storing/sharing/updating potentially mutable tuples
+// (name, namespace, valSha256, parentSha256, metaDataSha256). The
 // primary key is (name, namespace). Provides atomic transactions for updates via
-// Optimistic Concurrency Control. the metaDataSha256 is a Value that is a dictionary
-// of {isConst: boolean, isDeleted: boolean} stored in the ValueStore.
+// Optimistic Concurrency Control. the metaDataSha256 is a Val that is a dictionary
+// of {isConst: boolean, isDeleted: boolean} stored in the ValStore.
 //
 // TODO: Some namespaces may be "protected", which means that users are not allowed
-// create/update/delete variables in those namespaces.
+// create/update/delete vars in those namespaces.
 //
-// Valid Variable operations:
-// 1. create a new variable (name, namespace) not already in store
-// 2. update an existing variable with a given valueSha256 (name, namespace, valueSha256)
+// Valid Var operations:
+// 1. create a new var (name, namespace) not already in store
+// 2. update an existing var with a given valSha256 (name, namespace, valSha256)
 // TODO: Implement delete...
-// 3. delete an existing variable (name, namespace)
+// 3. delete an existing var (name, namespace)
 //     - by default "soft deleted", which means it is just flagged as deleted
-//       but not actually deleted (allowing for undelete) until a new value
-//       is set for the same (name, namespace). A soft-deleted Variable
+//       but not actually deleted (allowing for undelete) until a new val
+//       is set for the same (name, namespace). A soft-deleted Var
 //       maintains its isConst setting.
 //     - optionally "hard deleted" which actually deletes it from the backing
-//       store. If a Variable is ubsequently reated with the same (name,
-//       namespace) after a hard delete, the new Variable will not have the
-//       deleted Variable as its parent.
-// 4. undelete a (soft deleted) variable (name, namespace).
-export abstract class VariableStore {
-    // SetVariable Returns true if the Variable was successfully created or
+//       store. If a Var is ubsequently reated with the same (name,
+//       namespace) after a hard delete, the new Var will not have the
+//       deleted Var as its parent.
+// 4. undelete a (soft deleted) var (name, namespace).
+export abstract class VarStore {
+    // SetVar Returns true if the Var was successfully created or
     // updated, false if a tuple already exists with the provided name &
     // namespace but a different sha256 than the provided oldSha256. When trying
-    // to create a new Variable, omit the oldSha256 arg. If this returns false,
+    // to create a new Var, omit the oldSha256 arg. If this returns false,
     // it is up to you to deal with conflicts, which likely will mean: get the
-    // most recent version of the variable, perform any merging necessary
-    // between the changes you've applied to the underlying value and the
-    // changes present in the value that somebody else pushed alrady, and try
+    // most recent version of the var, perform any merging necessary
+    // between the changes you've applied to the underlying val and the
+    // changes present in the val that somebody else pushed alrady, and try
     // again.
-    abstract getVariable(
+    abstract getVar(
         name: string,
         namespace: string | null
     ): Promise<string | undefined>;
 
-    // Return true if the Variable was successfully created.
-    abstract newVariable(
+    // Return true if the Var was successfully created.
+    abstract newVar(
         name: string,
         namespace: string | null,
-        valueSha256: string
+        valSha256: string
     ): Promise<boolean>;
 
-    abstract updateVariable(
+    abstract updateVar(
         name: string,
         namespace: string | null,
         oldSha256: string,
         newSha256: string
     ): Promise<boolean>;
 
-    variableListeners: Map<string, Map<string, VariableUpdateCallback>> =
+    varListeners: Map<string, Map<string, VarUpdateCallback>> =
         new Map();
     subscriptionIdToKey: Map<string, string> = new Map();
 
     subscribeToUpdate(
         name: string,
         namespace: string | null,
-        callbackFn: VariableUpdateCallback
+        callbackFn: VarUpdateCallback
     ): string {
         const uuid = uuidv4();
         const key = _toVarKey(name, namespace);
-        if (!this.variableListeners.has(key)) {
-            this.variableListeners.set(key, new Map());
+        if (!this.varListeners.has(key)) {
+            this.varListeners.set(key, new Map());
         }
-        this.variableListeners.get(key)!.set(uuid, callbackFn);
+        this.varListeners.get(key)!.set(uuid, callbackFn);
         this.subscriptionIdToKey.set(uuid, key);
         return uuid;
     }
@@ -882,7 +880,7 @@ export abstract class VariableStore {
         if (!key) {
             return false;
         }
-        this.variableListeners.get(key)!.delete(subscriptionUUID);
+        this.varListeners.get(key)!.delete(subscriptionUUID);
         this.subscriptionIdToKey.delete(subscriptionUUID);
         return true;
     }
@@ -894,47 +892,51 @@ export abstract class VariableStore {
         newSha256: string
     ): void {
         const key = _toVarKey(name, namespace);
-        if (this.variableListeners.has(key)) {
-            this.variableListeners.get(key)?.forEach((cb) => {
+        if (this.varListeners.has(key)) {
+            this.varListeners.get(key)?.forEach((cb) => {
                 cb(name, namespace, oldSha256, newSha256);
             });
         }
     }
 }
 
-export class InMemoryVariableStore extends VariableStore {
-    private variableMap: Map<string, string>;
+export class InMemoryVarStore extends VarStore {
+    private varMap: Map<string, string>;
     private mutex: Mutex;
 
     constructor() {
         super();
-        this.variableMap = new Map();
+        this.varMap = new Map();
         this.mutex = new Mutex();
     }
 
-    async getVariable(
+    async getVar(
         name: string,
         namespace: string | null
     ): Promise<string | undefined> {
         return await this.mutex.runExclusive(async () => {
-            return this.variableMap.get(_toVarKey(name, namespace));
+            return this.varMap.get(_toVarKey(name, namespace));
         });
     }
 
-    // returns true if the variable did not exist and was created. Else returns false.
-    async newVariable(name: string, namespace: string | null, valueSha256: string): Promise<boolean> {
+    // returns true if the var did not exist and was created. Else returns false.
+    async newVar(
+        name: string,
+        namespace: string | null,
+        valSha256: string
+    ): Promise<boolean> {
         const key = _toVarKey(name, namespace);
         return await this.mutex.runExclusive(async () => {
-            if (this.variableMap.has(key)) {
+            if (this.varMap.has(key)) {
                 return false;
             }
-            this.variableMap.set(key, valueSha256);
-            this.notifyListeners(name, namespace, null, valueSha256);
+            this.varMap.set(key, valSha256);
+            this.notifyListeners(name, namespace, null, valSha256);
             return true;
         });
     }
 
-    async updateVariable(
+    async updateVar(
         name: string,
         namespace: string | null,
         oldSha256: string,
@@ -942,46 +944,45 @@ export class InMemoryVariableStore extends VariableStore {
     ): Promise<boolean> {
         const key = _toVarKey(name, namespace);
         return await this.mutex.runExclusive(async () => {
-            const currSha256 = this.variableMap.get(key);
+            const currSha256 = this.varMap.get(key);
             if (currSha256 !== oldSha256) {
                 console.error(
-                    `provided oldSha256 ${oldSha256} does not match current value in in-memory variableMap ${currSha256}`
+                    `provided oldSha256 ${oldSha256} does not match current val in in-memory varMap ${currSha256}`
                 );
                 return false;
             }
-            this.variableMap.set(key, newSha256);
+            this.varMap.set(key, newSha256);
             this.notifyListeners(name, namespace, oldSha256, newSha256);
             return true;
         });
     }
-
 }
 
 export class InMemoryJsonStore extends JsonStore {
-    private valueMap: Map<string, any>;
+    private valMap: Map<string, any>;
 
     constructor() {
         super();
-        this.valueMap = new Map();
+        this.valMap = new Map();
     }
 
     async hasJson(sha256: string): Promise<boolean> {
-        return this.valueMap.has(sha256);
+        return this.valMap.has(sha256);
     }
 
     async getJson(sha256: string): Promise<any> {
-        return this.valueMap.get(sha256);
+        return this.valMap.get(sha256);
     }
 
     async putJson(object: any): Promise<string> {
         const sha256 = getSha256(object);
-        this.valueMap.set(sha256, object);
+        this.valMap.set(sha256, object);
         return sha256;
     }
 
     async deleteJson(sha256: string): Promise<void> {
-        if (this.valueMap.has(sha256)) {
-            this.valueMap.delete(sha256);
+        if (this.valMap.has(sha256)) {
+            this.valMap.delete(sha256);
         }
     }
 }
@@ -1031,9 +1032,6 @@ export class BrowserIndexedDBJsonStore extends JsonStore {
     }
 }
 
-// Define the detail structure for TypeScript
-// When we add ability to delete Variables, we might change newValue to type string | null
-// or maybe intead we will add a type field to the event that can be "CREATE" | "UPDATE" | "DELETE"
 interface CustomStorageDetail {
     key: string;
     oldValue: string | null;
@@ -1045,25 +1043,19 @@ function setupCustomLocalStorageObserver() {
         return;
     }
 
-    interface CustomStorageDetail {
-        key: string;
-        oldValue: string | null;
-        newValue: string;
-    }
-
     const originalSetItem = localStorage.setItem.bind(localStorage);
     const originalRemoveItem = localStorage.removeItem.bind(localStorage);
 
     // Create a custom event function
     function dispatchStorageEvent(
         key: string,
-        oldValue: string | null,
-        newValue: string
+        oldVal: string | null,
+        newVal: string
     ) {
         const eventDetail: CustomStorageDetail = {
             key,
-            oldValue,
-            newValue,
+            oldValue: oldVal,
+            newValue: newVal,
         };
 
         const event = new CustomEvent<CustomStorageDetail>("customStorage", {
@@ -1073,23 +1065,23 @@ function setupCustomLocalStorageObserver() {
     }
 
     // Override localStorage.setItem
-    localStorage.setItem = (key: string, value: string): void => {
-        const oldValue = localStorage.getItem(key);
-        originalSetItem(key, value);
-        dispatchStorageEvent(key, oldValue, value);
+    localStorage.setItem = (key: string, val: string): void => {
+        const oldVal = localStorage.getItem(key);
+        originalSetItem(key, val);
+        dispatchStorageEvent(key, oldVal, val);
     };
 
-    // TODO add ability to delete variables from VariableStore
+    // TODO add ability to delete vars from VarStore
     //// Override localStorage.removeItem
     //localStorage.removeItem = (key: string): void => {
-    //    const oldValue = localStorage.getItem(key);
+    //    const oldVal = localStorage.getItem(key);
     //    originalRemoveItem(key);
-    //    dispatchStorageEvent(key, oldValue, null);
+    //    dispatchStorageEvent(key, oldVal, null);
     //};
     isCustomLocalStorageObserverSetup = true;
 }
 
-export class BrowserLocalStorageVariableStore extends VariableStore {
+export class BrowserLocalStorageVarStore extends VarStore {
     constructor() {
         if (typeof localStorage === "undefined") {
             throw new Error(
@@ -1102,9 +1094,9 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
             console.log(
                 "Key Modified:",
                 e.key,
-                "Old Value:",
+                "Old Val:",
                 e.oldValue,
-                "New Value:",
+                "New Val:",
                 e.newValue
             );
             const { name, namespace } = _fromVarKey(e.key);
@@ -1120,9 +1112,9 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
                 console.log(
                     "Key Modified:",
                     e.detail.key,
-                    "Old Value:",
+                    "Old Val:",
                     e.detail.oldValue,
-                    "New Value:",
+                    "New Val:",
                     e.detail.newValue
                 );
                 const { name, namespace } = _fromVarKey(e.detail.key);
@@ -1136,16 +1128,16 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
         });
     }
 
-    async newVariable(
+    async newVar(
         name: string,
         namespace: string | null,
         sha256: string
     ): Promise<boolean> {
-        const currSha256 = await this.getVariable(name, namespace);
+        const currSha256 = await this.getVar(name, namespace);
         if (currSha256) {
             console.error(
-                `variable ${name} already exists in namespace ${namespace}. ` +
-                    `Did you mean to use updateVariable() instead?`
+                `var ${name} already exists in namespace ${namespace}. ` +
+                    `Did you mean to use updateVar() instead?`
             );
             return false;
         }
@@ -1153,16 +1145,16 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
         return true;
     }
 
-    async updateVariable(
+    async updateVar(
         name: string,
         namespace: string | null,
         oldSha256: string,
         newSha256: string
     ): Promise<boolean> {
-        const currSha256 = await this.getVariable(name, namespace);
+        const currSha256 = await this.getVar(name, namespace);
         if (currSha256 !== oldSha256) {
             console.error(
-                `provided oldSha256 ${oldSha256} does not match current value in in-memory variableMap ${currSha256}`
+                `provided oldSha256 ${oldSha256} does not match current val in in-memory varMap ${currSha256}`
             );
             return false;
         }
@@ -1170,7 +1162,7 @@ export class BrowserLocalStorageVariableStore extends VariableStore {
         return true;
     }
 
-    async getVariable(name: string, namespace: string | null) {
+    async getVar(name: string, namespace: string | null) {
         return localStorage.getItem(_toVarKey(name, namespace)) || undefined;
     }
 }
@@ -1183,9 +1175,7 @@ export class FileBackedJsonStore extends JsonStore {
 
     constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
         if (typeof window !== "undefined") {
-            throw new Error(
-                "FileBackedJsonStore is not available in browser"
-            );
+            throw new Error("FileBackedJsonStore is not available in browser");
         }
         super();
         this.jsonStoreFileName = fileName;
@@ -1236,89 +1226,87 @@ export class FileBackedJsonStore extends JsonStore {
     }
 }
 
-export class FileBackedVariableStore extends VariableStore {
-    private variableStoreFileName: string;
+export class FileBackedVarStore extends VarStore {
+    private varStoreFileName: string;
 
     constructor(fileName: string = VARIABLE_STORE_FILE_PATH) {
         if (typeof window !== "undefined") {
-            throw new Error(
-                "FileBackedJsonStore is not available in browser"
-            );
+            throw new Error("FileBackedJsonStore is not available in browser");
         }
         super();
-        this.variableStoreFileName = fileName;
-        if (!fs.existsSync(this.variableStoreFileName)) {
-            fs.writeFileSync(this.variableStoreFileName, "");
+        this.varStoreFileName = fileName;
+        if (!fs.existsSync(this.varStoreFileName)) {
+            fs.writeFileSync(this.varStoreFileName, "");
         }
     }
 
-    private readVariableStoreFile(): { [key: string]: string } {
-        const file = fs.readFileSync(this.variableStoreFileName, "utf8");
+    private readVarStoreFile(): { [key: string]: string } {
+        const file = fs.readFileSync(this.varStoreFileName, "utf8");
         return JSON.parse(file);
     }
 
-    async newVariable(
+    async newVar(
         name: string,
         namespace: string | null,
-        valueSha256: string
+        valSha256: string
     ): Promise<boolean> {
         const release = await lockfile.lock(
-            this.variableStoreFileName,
+            this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const variableStore = this.readVariableStoreFile();
+        const varStore = this.readVarStoreFile();
         const key = _toVarKey(name, namespace);
-        if (key in variableStore) {
+        if (key in varStore) {
             console.error(
-                `variable ${name} already exists in namespace ${namespace} in ` +
-                    `file ${this.variableStoreFileName}. Did you mean to use ` +
-                    `updateVariable() instead?`
+                `var ${name} already exists in namespace ${namespace} in ` +
+                    `file ${this.varStoreFileName}. Did you mean to use ` +
+                    `updateVar() instead?`
             );
             return false;
         }
-        variableStore[key] = valueSha256;
+        varStore[key] = valSha256;
         fs.writeFileSync(
-            this.variableStoreFileName,
-            JSON.stringify(variableStore)
+            this.varStoreFileName,
+            JSON.stringify(varStore)
         );
         release();
         return true;
     }
 
-    async updateVariable(
+    async updateVar(
         name: string,
         namespace: string | null,
-        valueSha256: string
+        valSha256: string
     ): Promise<boolean> {
         const release = await lockfile.lock(
-            this.variableStoreFileName,
+            this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const variableStore = this.readVariableStoreFile();
+        const varStore = this.readVarStoreFile();
         const key = _toVarKey(name, namespace);
-        if (key in variableStore && variableStore[key] !== valueSha256) {
+        if (key in varStore && varStore[key] !== valSha256) {
             return false;
         }
-        variableStore[key] = valueSha256;
+        varStore[key] = valSha256;
         fs.writeFileSync(
-            this.variableStoreFileName,
-            JSON.stringify(variableStore)
+            this.varStoreFileName,
+            JSON.stringify(varStore)
         );
         release();
         return true;
     }
 
-    async getVariable(
+    async getVar(
         name: string,
         namespace: string | null
     ): Promise<string | undefined> {
         const release = await lockfile.lock(
-            this.variableStoreFileName,
+            this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const variableStore = this.readVariableStoreFile();
+        const varStore = this.readVarStoreFile();
         release();
-        return variableStore[_toVarKey(name, namespace)];
+        return varStore[_toVarKey(name, namespace)];
     }
 }
 
@@ -1354,7 +1342,7 @@ class SupabaseJsonStore extends JsonStore {
             return row.json;
         } else {
             throw new Error(
-                `Value with sha256 '${sha256}' not found in database`
+                `Val with sha256 '${sha256}' not found in database`
             );
         }
     }
@@ -1384,7 +1372,7 @@ class SupabaseJsonStore extends JsonStore {
                     return sha256;
                 }
                 throw new Error(
-                    `Value with sha256 ${sha256} already in database but could not be fetched.`
+                    `Val with sha256 ${sha256} already in database but could not be fetched.`
                 );
             }
             throw error;
@@ -1394,7 +1382,7 @@ class SupabaseJsonStore extends JsonStore {
             return sha256;
         }
         throw new Error(
-            `Value ${sha256} was inserted but not successfully returned.`
+            `Val ${sha256} was inserted but not successfully returned.`
         );
 
         function assertReturnEqualToPutObj(row: { json: any }) {
@@ -1419,22 +1407,22 @@ class SupabaseJsonStore extends JsonStore {
     }
 }
 
-//class SupabaseVariableStore extends VariableStore {
+//class SupabaseVarStore extends VarStore {
 //    supabaseClient: SupabaseClient;
-//    variablesTableName: string;
+//    varsTableName: string;
 //    //supabaseSubcriptions: { RealtimeChannel[];
-//    //__jsosUpdateCallback: VariableUpdateCallback | null;
-//    //    updateCallback?: VariableUpdateCallback | null
+//    //__jsosUpdateCallback: VarUpdateCallback | null;
+//    //    updateCallback?: VarUpdateCallback | null
 //    //    this.__jsosUpdateCallback = updateCallback;
-//    //    updateCallback?: (newValue: any, newSha256: string) => void
+//    //    updateCallback?: (newVal: any, newSha256: string) => void
 //
 //    constructor(
 //        supabaseClient: SupabaseClient,
-//        variablesTableName: string = DEFAULT_VARIABLES_TABLE_NAME
+//        varsTableName: string = DEFAULT_VARIABLES_TABLE_NAME
 //    ) {
 //        super();
 //        this.supabaseClient = supabaseClient;
-//        this.variablesTableName = variablesTableName;
+//        this.varsTableName = varsTableName;
 //        //this.__jsosSupabaseSubcription = null;
 //    }
 //
@@ -1454,7 +1442,7 @@ class SupabaseJsonStore extends JsonStore {
 //    //    if (this.subscribed()) {
 //    //        return;
 //    //    }
-//    //    const remoteSha256 = await this.jsosClient.getSha256FromVariable(
+//    //    const remoteSha256 = await this.jsosClient.getSha256FromVar(
 //    //        this.name,
 //    //        this.namespace
 //    //    );
@@ -1487,7 +1475,7 @@ class SupabaseJsonStore extends JsonStore {
 //    //            {
 //    //                event: "*",
 //    //                schema: "public",
-//    //                table: this.jsosClient.variablesTableName,
+//    //                table: this.jsosClient.varsTableName,
 //    //                filter: `name=eq.${this.name}`,
 //    //            },
 //    //            async (payload) => {
@@ -1518,12 +1506,12 @@ class SupabaseJsonStore extends JsonStore {
 //    //        */
 //    //};
 //
-//    async getVariable(
+//    async getVar(
 //        name: string,
 //        namespace: string | null = null
 //    ): Promise<string | undefined> {
 //        let queryBuilder = this.supabaseClient
-//            .from(this.variablesTableName)
+//            .from(this.varsTableName)
 //            .select("object")
 //            .eq("name", name);
 //        // Use "is" for NULL and "eq" for non-null
@@ -1541,22 +1529,22 @@ class SupabaseJsonStore extends JsonStore {
 //        }
 //    }
 //
-//    async newVariable(
+//    async newVar(
 //        name: string,
 //        namespace: string | null,
 //        oldSha256: string,
 //        sha256: string
 //    ): Promise<boolean> {
 //        const { data: row, error } = await this.supabaseClient
-//            .from(this.variablesTableName)
+//            .from(this.varsTableName)
 //            .insert({ name: name, namespace: namespace, object: sha256 })
-//            .select("value_sha256")
+//            .select("val_sha256")
 //            .maybeSingle();
 //        if (error) {
 //            if (error.code === "23505") {
 //                // Reference with name this name, namespace, & `object` already exists in database.
 //                const { data: row, error } = await this.supabaseClient
-//                    .from(this.variablesTableName)
+//                    .from(this.varsTableName)
 //                    .select("object")
 //                    .eq("name", name)
 //                    .eq("namespace", namespace)
@@ -1568,7 +1556,7 @@ class SupabaseJsonStore extends JsonStore {
 //                    return true;
 //                }
 //                throw new Error(
-//                    `Value with sha256 ${sha256} already in database but could not be fetched.`
+//                    `Val with sha256 ${sha256} already in database but could not be fetched.`
 //                );
 //            }
 //        }
@@ -1578,15 +1566,41 @@ class SupabaseJsonStore extends JsonStore {
 //    };
 //}
 
-const DEFAULT_VALUE_STORE = new ValueStore(
-    new MultiJsonStore([new InMemoryJsonStore()])
-);
+//const DEFAULT_VALUE_STORE = new ValStore(
+//    new MultiJsonStore([new InMemoryJsonStore()])
+//);
+const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
 
-export class Value {
-    __jsosValueStore: ValueStore;
-    __jsosSha256: string;
-    __jsosObject: any;
-    __jsosEncodedNormalizedObject: EncodedNormalized;
+export class Val {
+    __jsosValStore: ValStore;
+    readonly __jsosSha256: string;
+    readonly __jsosObject: any;
+
+    constructor(object: any, sha256: string, valStore: ValStore) {
+        // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
+        this.__jsosObject = object;
+        this.__jsosValStore = valStore;
+        this.__jsosSha256 = sha256;
+        return new Proxy(this, {
+            get: (target, prop, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    return Reflect.get(target, prop, receiver);
+                } else {
+                    const jsosObject = target.__jsosObject;
+                    if (jsosObject !== Object(jsosObject)) {
+                        // If target.__jsosObject is a primitive, then it
+                        // doesn't have a prop so Reflect.get breaks since it
+                        // bypasses Javascript's automatic type boxing behavior
+                        // (e.g., treating a string primitive as a String).
+                        // Using this instead of Reflect.get() will
+                        // automatically box the primitive.
+                        return jsosObject[prop];
+                    }
+                    return Reflect.get(jsosObject, prop, receiver);
+                }
+            },
+        });
+    }
 
     async __jsosUpdateIn(
         indexArray: Array<string | number>,
@@ -1595,264 +1609,321 @@ export class Value {
         throw Error("Not implemented");
     }
 
-    __jsosSetIn(
-        indexArray: Array<string | number>,
-        newVal: any
-    ): Promise<Value> {
+    __jsosSetIn(indexArray: Array<string | number>, newVal: any): Promise<Val> {
         throw Error("Not implemented");
     }
 
     async __jsosUpdate(
         updateFn: AsyncValUpdateFn | SyncValUpdateFn
-    ): Promise<Value> {
+    ): Promise<Val> {
         let newVal = updateFn(this.__jsosObject);
         if (newVal instanceof Promise) {
             newVal = await newVal;
         }
-        return await Value.create(newVal, this.__jsosValueStore);
+        return await NewVal(newVal, this.__jsosValStore);
     }
 
     async __jsosUpdateSync(
         updateFn: (currVal: any) => Promise<any>
-    ): Promise<Value> {
+    ): Promise<Val> {
         const newVal = await updateFn(this.__jsosObject);
-        return await Value.create(newVal, this.__jsosValueStore);
+        return await NewVal(newVal, this.__jsosValStore);
     }
 
-    private constructor(object: any, encodedNormalizedObject: EncodedNormalized, sha256: string, valueStore: ValueStore) {
-        // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
-        this.__jsosObject = object;
-        this.__jsosEncodedNormalizedObject = encodedNormalizedObject;
-        this.__jsosValueStore = valueStore;
-        this.__jsosSha256 = sha256;
-        return new Proxy(this, {
-            get: (target, prop, receiver) => {
-                if (Reflect.has(target, prop)) {
-                    return Reflect.get(target, prop, receiver);
-                } else {
-                    return Reflect.get(target.__jsosObject, prop, receiver);
-                }
-            },
-        });
-    }
-
-    /* Use create pattern since constructor can't be async */
-    static create = async (
-        object: any,
-        valueStore?: ValueStore
-    ): Promise<Value> => {
-        const valStore = valueStore ?? DEFAULT_VALUE_STORE;
-        const [sha256, encodedNormalizedObj] = await valStore.putValue(object);
-        const putVal = await valStore.getValue(sha256)
-        return new Value(putVal, encodedNormalizedObj, sha256, valStore);
-    };
-
-    __jsosEquals(other: Value): boolean {
+    __jsosEquals(other: Val): boolean {
         return this.__jsosSha256 === other.__jsosSha256;
     }
 
-    __jsosIsValue(): true {
+    __jsosIsVal(): true {
         return true;
     }
+}
+
+export async function NewVal<T>(
+    object: T,
+    valStore?: ValStore
+): Promise<T & Val> {
+    const vStore = valStore ?? DEFAULT_VALUE_STORE;
+    const [sha256, _] = await vStore.putVal(object);
+    const putVal = await vStore.getVal(sha256);
+    return new Val(putVal, sha256, vStore) as T & Val;
+}
+
+export async function ValFromSha256(
+    sha256: string,
+    valStore?: ValStore
+): Promise<Val> {
+    const vStore = valStore ?? DEFAULT_VALUE_STORE;
+    const obj = await vStore.getVal(sha256);
+    return new Val(obj, sha256, vStore);
 }
 
 // A shared mutable object.
 //
 // Wraps any mutable object, auto-captures mutations to that object by
-// creating a new underlying `Value` from the post-mutated object and
-// setting __jsosValue to it.
+// creating a new underlying `Val` from the post-mutated object and
+// setting __jsosVal to it.
 //
 // Use cases:
 // 1) shared
-//   a) remote changes are asyncrously pushed automatically to this Variable
-//      causing the underlying Value to be replaced with a new one.
+//   a) remote changes are asyncrously pushed automatically to this Var
+//      causing the underlying Val to be replaced with a new one.
 //   b) manual/explicit syncing done via __jsosPull();
-// c) const - essentially a snapshot of a named Value at a point in time. Can't
-//    be updated. Once a Variable object is set to const, it can't be reverted to
-//    a mutable object. You can however, create a new Variable object from the
-//    same (name, namespace, valueSha256) tuple that is not a const.
+// c) const - essentially a snapshot of a named Val at a point in time. Can't
+//    be updated. Once a Var object is set to const, it can't be reverted to
+//    a mutable object. You can however, create a new Var object from the
+//    same (name, namespace, valSha256) tuple that is not a const.
 //
-// A Variable is intrinsically shared (via optimistic concurrency control)
+// A Var is intrinsically shared (via optimistic concurrency control)
 // but you do have control over:
 // 1) who it is shared with (e.g., you can share only with yourself
-//    by using only an in-memory VariableStore)
+//    by using only an in-memory VarStore)
 // 2) how conflicts are handled (e.g, pull updates and retry)
 //
-// When a variable update fails due to a conflict, an error is thrown. You
+// When a var update fails due to a conflict, an error is thrown. You
 // can catch it, pull updates, and try again.
 //
-// If __jsosSubscribeToUpdates is false, then the value is not auto-updated when
-// changes are pushed to __jsosVariableStore for the (__jsosName,
-// __jsosNamespace) key. If it is true, then __jsosValue is
-// updated automatically when changes are pushed to __jsosVariableStore
+// If __jsosSubscribeToUpdates is false, then the val is not auto-updated when
+// changes are pushed to __jsosVarStore for the (__jsosName,
+// __jsosNamespace) key. If it is true, then __jsosVal is
+// updated automatically when changes are pushed to __jsosVarStore
 // for the (__jsosName, __jsosNamespace) key.
 //
 // The level of sharing is determined by who else has access to
-// __jsosVariableStore. If that is not a shared database, e.g.: if it
+// __jsosVarStore. If that is not a shared database, e.g.: if it
 // is an InMemoryStore, then you are only sharing with yourself which should
 // povide sufficient control.
 //
-// TODO MAYBE: support different levels of sharing at the VariableStore level.
+// TODO MAYBE: support different levels of sharing at the VarStore level.
 // CRUD operations could be separated out, e.g.: allow sharing read-only access.
 //
-// We use Optimistic Concurrency Control, so updates to a variable will
-// thow an error if the variable has been changed in
-// __jsosVariableStore since this variable last pulled updates from it
+// We use Optimistic Concurrency Control, so updates to a var will
+// thow an error if the var has been changed in
+// __jsosVarStore since this var last pulled updates from it
 // either via subscribing to updates or via calling __jsosPull().
 //
-export interface VariableWrapper {
-    __jsosVariableStore: VariableStore;
+export interface Var {
+    __jsosVarStore: VarStore;
     __jsosName: string;
     __jsosNamespace: string | null;
-    __jsosValue: Value;
-    __jsosParentValue?: Value;
-    // If true, this Variable behaves like a named Value by making it immutable.
-    // To make changes one has to update the Variable to make this false.
-    // Note that this does *not* make the variable immutable in the VariableStore,
-    // just immutable via this Variable object.
+    __jsosVal: Val;
+    __jsosParentVal?: Val;
+    // If true, this Var behaves like a named Val by making it immutable.
+    // To make changes one has to update the Var to make this false.
+    // Note that this does *not* make the var immutable in the VarStore,
+    // just immutable via this Var object.
     __jsosIsConst: boolean;
     __jsosSubscribeToUpdates: boolean;
-    // while true, causes local mutations to this variable to fail, though remote
+    // while true, causes local mutations to this var to fail, though remote
     // changes can still be pulled in. This is a useful guard against accidental
     // updates.
     __jsosIsReadOnly: boolean;
-    // Fetch Value from VariableStore and set __jsosValue to it,
-    // overwriting whaterver value is there. This will throw an error if
+    // Fetch Val from VarStore and set __jsosVal to it,
+    // overwriting whaterver val is there. This will throw an error if
     // __jsosIsConst is true. Pulling updates is useful when
     // __jsosSubscribeToUpdates is false, in which case it gives you
-    // control over when to sync this Variable to the shared value.
+    // control over when to sync this Var to the shared val.
     __jsosPull(): void;
 }
 
-export const DEFAULT_VARIABLE_STORE = new InMemoryVariableStore();
+export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
 
-export class VariableWrapper {
+export class Var {
     /*
-       A Variable has a name, optionally a namespace, and the address (i.e., sha256) of a Value.
-        A variable can be updated to refer to a different Value. This is done via an atomic
+       A Var has a name, optionally a namespace, and the address (i.e., sha256) of a Val.
+        A var can be updated to refer to a different Val. This is done via an atomic
         update to the backing database.
-        By default a Variable is subscribed to Supabase postgres updates to the variable.
+        By default a Var is subscribed to Supabase postgres updates to the var.
     */
-    __jsosVariableStore: VariableStore;
+    __jsosVarStore: VarStore;
     __jsosName: string;
     __jsosNamespace: string | null;
-    __jsosValue: Value;
-    __jsosParentValue?: Value;
+    __jsosVal: Val;
+    __jsosSyncObj: any;
+    __jsosParentVal?: Val;
     __jsosSubscribeToUpdates: boolean;
 
     constructor(
         name: string,
         namespace: string | null = null,
-        value: Value,
-        variableStore: VariableStore,
+        val: Val,
+        varStore: VarStore,
         subscribeToUpdates: boolean,
-        parentValue?: Value
+        parentVal?: Val
     ) {
-        this.__jsosVariableStore = variableStore;
+        this.__jsosVarStore = varStore;
         this.__jsosName = name;
         this.__jsosNamespace = namespace;
-        this.__jsosValue = value;
+        this.__jsosVal = val;
+        this.__jsosSyncObj = val.__jsosObject;
         this.__jsosSubscribeToUpdates = subscribeToUpdates;
-        this.__jsosParentValue = parentValue;
+        this.__jsosParentVal = parentVal;
+        // TODO? explicity list all the properties that we want to intercept
+        //       and pass everything else through.
+
+        return new Proxy(this, {
+            get: (target, prop, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    console.log("intercepting ", prop);
+                    return Reflect.get(target, prop, receiver);
+                } else {
+                    console.log("passing through ", prop);
+                    return Reflect.get(
+                        target.__jsosVal.__jsosObject,
+                        prop,
+                        receiver
+                    );
+                }
+            },
+            set: (target, prop, val, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    console.log("intercepting set for ", prop);
+                    return Reflect.set(target, prop, val, receiver);
+                } else {
+                    console.log(
+                        "passing through set for ",
+                        prop,
+                        " to ",
+                        val
+                    );
+                    const setRes = Reflect.set(
+                        target.__jsosSyncObj,
+                        prop,
+                        val,
+                        receiver
+                    );
+                    (async () => {
+                        const oldSha256 = target.__jsosVal.__jsosSha256;
+                        this.__jsosVal = await this.__jsosVal.__jsosUpdate(
+                            (_) => this.__jsosVal.__jsosObject
+                        );
+                        console.log(
+                            "asynchronously updated __jsosVal to ",
+                            this.__jsosVal
+                        );
+                        if (oldSha256 !== this.__jsosVal.__jsosSha256) {
+                            await this.__jsosVarStore.updateVar(
+                                this.__jsosName,
+                                this.__jsosNamespace,
+                                oldSha256,
+                                this.__jsosVal.__jsosSha256
+                            );
+                            console.log(
+                                "asynchronously updated __jsosVarStore to ",
+                                this.__jsosVal.__jsosSha256
+                            );
+                        }
+                    })();
+                    return setRes;
+                }
+            },
+        });
     }
 
-    equals(other: VariableWrapper) {
+    __jsosEquals(other: Var) {
         return (
             this.__jsosName === other.__jsosName &&
             this.__jsosNamespace === other.__jsosNamespace &&
-            this.__jsosValue.__jsosEquals(other.__jsosValue)
+            this.__jsosVal.__jsosEquals(other.__jsosVal)
         );
     }
 }
 
-export class Variable {
-    // Create a new Variable object.  If value is a `Value` object, then this
-    // just directly uses its sha256.  Else this calls `Value.create(value)`
-    // which creates a new Value in the ValueStore and then uses its sha256 for
-    // the Variable.  Throws error if the Variable already exists in the
-    // VariableStore or if a Value is provided that has a
-    static create = async (
-        name: string,
-        value: any,
-        namespace: string | null = null,
-        valueStore?: ValueStore,
-        variableStore?: VariableStore,
-        subscribeToUpdates: boolean = true
-    ): Promise<VariableWrapper> => {
-        const valStore = valueStore ?? DEFAULT_VALUE_STORE;
-        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
-        let forSureAValue: Value;
-        if (value instanceof Value) {
-            console.log("already a Value");
-            forSureAValue = value;
-        } else {
-            forSureAValue = await Value.create(value, valueStore);
-            console.log("turned non-Value into Value");
+// Create a new Var object.  If val is a `Val` object, then this
+// just directly uses its sha256.  Else this calls `Val.create(val)`
+// which creates a new Val in the ValStore and then uses its sha256 for
+// the Var.  Throws error if the Var already exists in the
+// VarStore or if a Val is provided that has a
+export async function NewVar<T>(
+    name: string,
+    val: T,
+    namespace: string | null = null,
+    valStore?: ValStore,
+    varStore?: VarStore,
+    subscribeToUpdates: boolean = true
+): Promise<T & Var> {
+    const vlStore = valStore ?? DEFAULT_VALUE_STORE;
+    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
+    let forSureAVal: Val & T;
+    if (val instanceof Val) {
+        console.log("already a Val");
+        forSureAVal = val;
+    } else {
+        forSureAVal = await NewVal(val, vlStore);
+        console.log("turned non-Val into Val");
+    }
+    const newVarRes = vrStore.newVar(
+        name,
+        namespace,
+        forSureAVal.__jsosSha256
+    );
+    if (!newVarRes) {
+        if (await vrStore.getVar(name, namespace)) {
+            throw Error(`Var ${name} already exists in VarStore`);
         }
-        const newVarRes = varStore.newVariable(name, namespace, forSureAValue.__jsosSha256);
-        if (!newVarRes) {
-            if (await varStore.getVariable(name, namespace)) {
-                throw Error(`Variable ${name} already exists in VariableStore`);
-            }
-            throw Error("Failed to create new variable in VariableStore");
-        }
-        return new VariableWrapper(name, namespace, forSureAValue, varStore, subscribeToUpdates);
+        throw Error("Failed to create new var in VarStore");
     }
-
-    // returns undefined if the Variable does not exist in the VariableStore.
-    static get = async (
-        name: string,
-        namespace: string | null = null,
-        valueStore?: ValueStore,
-        variableStore?: VariableStore,
-        subscribeToUpdates: boolean = true
-    ): Promise<VariableWrapper | undefined> => {
-        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
-        console.log()
-        const valueSha256 = await varStore.getVariable(name, namespace)
-        if (valueSha256 === undefined) {
-            return undefined;
-        };
-        const val = await Value.create(valueSha256, valueStore)
-        return new VariableWrapper(name, namespace, val, varStore, subscribeToUpdates)
-    }
-
-    static fromValue = async (
-        name: string,
-        value: Value,
-        namespace: string | null = null,
-        variableStore?: VariableStore,
-        subscribeToUpdates: boolean = true
-    ): Promise<VariableWrapper> => {
-        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
-        return new VariableWrapper(name, namespace, value, varStore, subscribeToUpdates);
-    }
-
-    /*static getOrCreate = async (
-        name: string,
-        namespace: string | null = null,
-        defaultValue: any,
-        valueStore?: ValueStore,
-        variableStore?: VariableStore,
-    ) => {
-        const varStore = variableStore ?? DEFAULT_VARIABLE_STORE;
-        const val = await Variable.get(name, namespace, valueStore, varStore);
-        FINISH ME
-    }
-    */
+    return (new Var(
+        name,
+        namespace,
+        forSureAVal,
+        vrStore,
+        subscribeToUpdates
+    ) as T & Var);
 }
 
-//        /* If this variable exists already, fetch & return it. Else create it and
-//         * initialize it to wrap Value(null) */
-//        const sha256 = await jsosClient.getSha256FromVariable(name, namespace);
+// returns undefined if the Var does not exist in the VarStore.
+export async function GetVar(
+    name: string,
+    namespace: string | null = null,
+    valStore?: ValStore,
+    varStore?: VarStore,
+    subscribeToUpdates: boolean = true
+): Promise<any> {
+    const vlStore = valStore ?? DEFAULT_VALUE_STORE;
+    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
+    const valSha256 = await vrStore.getVar(name, namespace);
+    if (valSha256 === undefined) {
+        return undefined;
+    }
+    const val = await ValFromSha256(valSha256, vlStore);
+    return new Var(name, namespace, val, vrStore, subscribeToUpdates) as any;
+}
+
+export async function GetVarFromVal(
+    name: string,
+    val: Val,
+    namespace: string | null = null,
+    varStore?: VarStore,
+    subscribeToUpdates: boolean = true
+): Promise<any> {
+    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
+    return new Var(name, namespace, val, vrStore, subscribeToUpdates) as any;
+}
+
+//export async function GetOrNewVar (
+//    name: string,
+//    namespace: string | null = null,
+//    defaultVal: any,
+//    valStore?: ValStore,
+//    varStore?: VarStore,
+//) {
+//    const varStore = varStore ?? DEFAULT_VARIABLE_STORE;
+//    const val = await Var.get(name, namespace, valStore, varStore);
+//    FINISH ME
+//}
+
+//        /* If this var exists already, fetch & return it. Else create it and
+//         * initialize it to wrap Val(null) */
+//        const sha256 = await jsosClient.getSha256FromVar(name, namespace);
 //        const parentSha256 =
-//            (await jsosClient.getSha256FromVariable(
+//            (await jsosClient.getSha256FromVar(
 //                sha256,
 //                VARIABLE_PARENT_KEY
 //            )) || null;
 //        let newVar;
 //        if (sha256) {
-//            newVar = new Variable(
+//            newVar = new Var(
 //                jsosClient,
 //                name,
 //                sha256,
@@ -1861,9 +1932,9 @@ export class Variable {
 //                updateCallback
 //            );
 //        } else {
-//            const nullSha256 = await getSha256(await jsosClient.putValue(null));
+//            const nullSha256 = await getSha256(await jsosClient.putVal(null));
 //            await jsosClient.putReference(name, namespace, nullSha256);
-//            newVar = new Variable(
+//            newVar = new Var(
 //                jsosClient,
 //                name,
 //                nullSha256,
@@ -1893,8 +1964,8 @@ export class Variable {
 //        }
 //    };
 //
-//    get = async (): Promise<Value> => {
-//        const obj = await this.jsosClient.getValue(this.objectSha256);
+//    get = async (): Promise<Val> => {
+//        const obj = await this.jsosClient.getVal(this.objectSha256);
 //        if (!obj) {
 //            throw Error(
 //                `Object with sha256 '${this.objectSha256}' not found in database`
@@ -1903,8 +1974,8 @@ export class Variable {
 //        return obj;
 //    };
 //
-//    getParent = async (): Promise<Value> => {
-//        const obj = await this.jsosClient.getValue(this.parentSha256);
+//    getParent = async (): Promise<Val> => {
+//        const obj = await this.jsosClient.getVal(this.parentSha256);
 //        if (!obj) {
 //            throw Error(
 //                `Parent object with sha256 '${this.parentSha256}' not found in database`
@@ -1913,14 +1984,14 @@ export class Variable {
 //        return obj;
 //    };
 //
-//    set = async (newVal: JValue | Value): Promise<Value> => {
+//    set = async (newVal: JVal | Val): Promise<Val> => {
 //        /* TODO: We might need to use a lock to handle race conditions between
 //         * this function and updates done by the supbase subscription callback. */
-//        if (!isValue(newVal)) {
-//            newVal = await this.jsosClient.value(newVal);
+//        if (!isVal(newVal)) {
+//            newVal = await this.jsosClient.val(newVal);
 //        }
 //        let queryBuilder = this.jsosClient.supabaseClient
-//            .from(this.jsosClient.variablesTableName)
+//            .from(this.jsosClient.varsTableName)
 //            .update({ object: newVal.sha256 })
 //            .eq("name", this.name)
 //            .eq("object", this.objectSha256);
@@ -1936,7 +2007,7 @@ export class Variable {
 //        if (!row) {
 //            const { data: innerRow, error } =
 //                await this.jsosClient.supabaseClient
-//                    .from(this.jsosClient.variablesTableName)
+//                    .from(this.jsosClient.varsTableName)
 //                    .update({ object: newVal.sha256 })
 //                    .eq("name", this.name)
 //                    .eq("namespace", this.namespace)
@@ -1948,16 +2019,16 @@ export class Variable {
 //            if (innerRow) {
 //                throw new Error(
 //                    `Object with sha256 '${this.objectSha256}' not found in database. ` +
-//                        "This variable was probably updated by somebody asynchronously " +
-//                        "and the update did not make it back to this copy of the variable. " +
-//                        "Is this variable subscribed() to supabase updates? If not you " +
+//                        "This var was probably updated by somebody asynchronously " +
+//                        "and the update did not make it back to this copy of the var. " +
+//                        "Is this var subscribed() to supabase updates? If not you " +
 //                        "should subscribe() to supabase updates to avoid this error."
 //                );
 //            } else {
 //                throw new Error(
 //                    `No ref found in supabase with name ${this.name} ` +
-//                        `and namespace ${this.namespace}. The associated with this variable ` +
-//                        `may have been deleted from supabase since you created this variable.`
+//                        `and namespace ${this.namespace}. The associated with this var ` +
+//                        `may have been deleted from supabase since you created this var.`
 //                );
 //            }
 //        } else {
@@ -1966,11 +2037,11 @@ export class Variable {
 //        }
 //    };
 //
-//    update = async (updateFn: (currVal: JValue) => JValue) => {
-//        /* Updates the entry in supbase for this variable to point to the new value
+//    update = async (updateFn: (currVal: JVal) => JVal) => {
+//        /* Updates the entry in supbase for this var to point to the new value
 //        using a postgres transaction to ensure that the object we think is current
 //        is the same as what the database thinks is the current object pointed
-//        to by this variable. If the object has changed, we throw an error and
+//        to by this var. If the object has changed, we throw an error and
 //        the caller can try again.
 //        */
 //        const currVal = await this.get();
@@ -1989,13 +2060,13 @@ export class Variable {
 //}
 
 //export interface PersistentOrderedMap<K, V> {
-//    update(key: K, notSetValue: V, updater: (value: V) => V): this;
-//    update(key: K, updater: (value: V | undefined) => V | undefined): this;
-//    update<R>(updater: (value: this) => R): R;
-//    set(key: K, value: V): this;
+//    update(key: K, notSetVal: V, updater: (val: V) => V): this;
+//    update(key: K, updater: (val: V | undefined) => V | undefined): this;
+//    update<R>(updater: (val: this) => R): R;
+//    set(key: K, val: V): this;
 //    toObject(): { [key: string]: V };
 //    equals(other: unknown): boolean;
-//    get<NSV>(key: K, notSetValue: NSV): V | NSV;
+//    get<NSV>(key: K, notSetVal: NSV): V | NSV;
 //    get(key: K): V | undefined;
 //}
 //
@@ -2043,7 +2114,7 @@ export class Variable {
 //        ...args
 //    ): Promise<PersistentOrderedMap<K, V>> => {
 //        const map = OrderedMap<K, V>(...args);
-//        const sha256 = getSha256(await jsosClient.putValue(map));
+//        const sha256 = getSha256(await jsosClient.putVal(map));
 //        return new PersistentOrderedMap(jsosClient, map, sha256);
 //    };
 //}
@@ -2074,25 +2145,25 @@ export class Variable {
 //        ...args
 //    ): Promise<OldPersistentOrderedMap<K, V>> => {
 //        const map = OrderedMap<K, V>(...args);
-//        const sha256 = getSha256(await jsosClient.putValue(map.toArray()));
+//        const sha256 = getSha256(await jsosClient.putVal(map.toArray()));
 //        return new OldPersistentOrderedMap(jsosClient, map, sha256);
 //    };
 //
-//    async set(key: K, value: V): Promise<OldPersistentOrderedMap<K, V>> {
+//    async set(key: K, val: V): Promise<OldPersistentOrderedMap<K, V>> {
 //        const newMap = OldPersistentOrderedMap.create<K, V>(
 //            this.jsosClient,
-//            this.map.set(key, value)
+//            this.map.set(key, val)
 //        );
 //        return newMap;
 //    }
 //
 //    async setIn(
 //        keyPath: Iterable<K>,
-//        value: V
+//        val: V
 //    ): Promise<OldPersistentOrderedMap<K, V>> {
 //        const newMap = OldPersistentOrderedMap.create<K, V>(
 //            this.jsosClient,
-//            this.map.setIn(keyPath, value)
+//            this.map.setIn(keyPath, val)
 //        );
 //        return newMap;
 //    }

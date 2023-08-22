@@ -1,11 +1,11 @@
 import React, { useEffect } from 'react';
-import jsos, { VariableWrapper, Value } from './jsos';
+import { Var, Val, NewVar } from './jsos';
 
-export const DataContext = React.createContext<Array<Value|Function|null>>([]);
+export const DataContext = React.createContext<Array<Val|Function|null>>([]);
 
 export default function JsosContextProvider({ children, name, namespace }) {
-    const [jsosVar, setJsosVar] = React.useState<null | VariableWrapper >(null);
-    const [appData, setAppData] = React.useState<{[key: string]: null | Value}>({ pObject: null });
+    const [jsosVar, setJsosVar] = React.useState<null | Var >(null);
+    const [appData, setAppData] = React.useState<{[key: string]: null | Val}>({ pObject: null });
 
     function varChanged(newObj, newSha1) {
         console.log("varChanged triggered: ", newObj, newSha1)
@@ -13,7 +13,7 @@ export default function JsosContextProvider({ children, name, namespace }) {
     }
     useEffect(() => {
         (async () => {
-            let fetchedVar = await jsos.variable('appData', "benw-trivia", true, varChanged);
+            let fetchedVar = await NewVar('appData', "benw-trivia", true, varChanged);
             setJsosVar(fetchedVar);
             console.log("finished init setAppData to: ", fetchedVar);
         })();
