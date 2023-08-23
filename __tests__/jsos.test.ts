@@ -69,15 +69,13 @@ test("encodeNormalized and decodeNormalized.", async () => {
 
 test("VarStore basics", async () => {
     const varStore = new InMemoryVarStore();
-    expect(
-        await varStore.newVar("name", "namespace", "exampleSha256")
-    ).toBe(true);
-    expect(
-        await varStore.newVar("name", "namespace", "exampleSha256")
-    ).toBe(false);
-    expect(await varStore.getVar("name", "namespace")).toBe(
-        "exampleSha256"
+    expect(await varStore.newVar("name", "namespace", "exampleSha256")).toBe(
+        true
     );
+    expect(await varStore.newVar("name", "namespace", "exampleSha256")).toBe(
+        false
+    );
+    expect(await varStore.getVar("name", "namespace")).toBe("exampleSha256");
     expect(
         await varStore.updateVar(
             "name",
@@ -104,7 +102,7 @@ test("VarStore basics", async () => {
             expect(newSha256).toBe("newerSha256");
         }
     );
-    const subscrID = varStore.subscribeToUpdate("name", "namespace", callBack);
+    const subscrID = varStore.subscribeToUpdates("name", "namespace", callBack);
     expect(callBack).toBeCalledTimes(0);
     expect(
         await varStore.updateVar(
@@ -115,7 +113,7 @@ test("VarStore basics", async () => {
         )
     ).toBe(true);
     expect(callBack).toBeCalledTimes(1);
-    expect(varStore.unsubscribeFromUpdate(subscrID)).toBe(true);
+    expect(varStore.unsubscribeFromUpdates(subscrID)).toBe(true);
     expect(
         await varStore.updateVar(
             "name",
@@ -128,47 +126,50 @@ test("VarStore basics", async () => {
 });
 
 test("Val basics", async () => {
-    const init = [1,2,3];
-    const v: any = await NewVal(init);
-    expect(v.__jsosObject).toEqual(init);
+    const init = [1, 2, 3];
+    const v = await NewVal({ object: init});
+    expect(v.__jsosValObject).toEqual(init);
     expect(v[0]).toBe(1);
     expect(v[2]).toBe(3);
     expect(v.length).toBe(3);
     expect(v[3]).toBe(undefined);
-    const updated = await v.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4]);
-    expect(updated.__jsosObject).toEqual([1,2,3,4]);
+    const updated = await v.__jsosUpdate((oldVal: Array<number>) => [
+        ...oldVal,
+        4,
+    ]);
+    expect(updated.__jsosValObject).toEqual([1, 2, 3, 4]);
     expect(v.__jsosSha256).not.toBe(updated.__jsosSha256);
 
-    const aStr = "a string";
-    const strVal: any = await NewVal(aStr);
-    const newStr = await strVal.__jsosUpdate((oldVal: string) => oldVal + " with more");
-    expect(newStr.__jsosObject).toBe("a string with more");
+    const strVal: any = await NewVal({object: "a string"});
+    const newStr = await strVal.__jsosUpdate(
+        (oldVal: string) => oldVal + " with more"
+    );
+    expect(newStr.__jsosValObject).toBe("a string with more");
 
-    const aBool = true;
-    const boolVal: any = await NewVal(aBool);
-    const newBool = await boolVal.__jsosUpdate((oldVal: boolean) => oldVal && false);
-    expect (newBool.__jsosObject).toBe(false);
+    const boolVal: any = await NewVal({object: true});
+    const newBool = await boolVal.__jsosUpdate(
+        (oldVal: boolean) => oldVal && false
+    );
+    expect(newBool.__jsosValObject).toBe(false);
 });
 
 test("Var basics", async () => {
-    const init = [1,2,3];
-    const v: any = await NewVar("myVar", init);
+    const init = [1, 2, 3];
+    const v = await NewVar({name: "myVar", val: init});
     //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
-    const v2: any = await GetVar("myVar");
+    const v2 = await GetVar({name: "myVar"});
     expect(v2).toBeDefined();
     expect(v.__jsosEquals(v2)).toBe(true);
-    const v3: any = await GetVarFromVal(
-        "name2", await NewVal([1,2,3])
-    );
+    const v3 = await GetVarFromVal({name: "name2", val: await NewVal({object: [1, 2, 3]})});
     expect(v.__jsosSha256).toEqual(v3.__jsosSha256);
     expect(v[0]).toBe(1);
     v[3] = 4;
     expect(v[3]).toBe(4);
-    //TODO: add a sleep or block until the Var update callback is called
+    expect(v.length).toBe(4);
     function sleep(ms: number) {
-        return new Promise(resolve => setTimeout(resolve, ms));
+        return new Promise((resolve) => setTimeout(resolve, ms));
     }
-    await sleep(1000)
+    await sleep(1); // Little surprising, but 1ms seems to give enough time for the async update to happen.
     expect(v2.length).toBe(4);
 });
 

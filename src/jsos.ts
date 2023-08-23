@@ -137,9 +137,7 @@ function isPrimitiveArray(val: any): val is Primitive[] {
     return Array.isArray(val) && val.every(isPrimitive);
 }
 
-function isNormalizedJsonObject(
-    val: any
-): val is { [key: string]: Primitive } {
+function isNormalizedJsonObject(val: any): val is { [key: string]: Primitive } {
     if (typeof val !== "object" || val === null || Array.isArray(val))
         return false;
 
@@ -148,9 +146,7 @@ function isNormalizedJsonObject(
 
 function isNormalizedJson(val: any): val is NormalizedJson {
     return (
-        isPrimitive(val) ||
-        isPrimitiveArray(val) ||
-        isNormalizedJsonObject(val)
+        isPrimitive(val) || isPrimitiveArray(val) || isNormalizedJsonObject(val)
     );
 }
 
@@ -444,7 +440,7 @@ export class ValStore {
 
     // Throws an error if the object is not encoded and normalized.  If you
     // fetch an object regardless of its type, use JsonStore.getJson()
-    async getVal(sha256: string): Promise<any> {
+    async getVal(sha256: string, freeze: boolean = true): Promise<any> {
         const encodedNormalized = await this.jsonStore.getJson(sha256);
         if (!isEncodedNormalized(encodedNormalized)) {
             throw new Error(
@@ -453,7 +449,7 @@ export class ValStore {
         }
         const normalized = await this.decodeNormalized(encodedNormalized);
         const denormalized = await this.denormalize(normalized);
-        return this.decode(denormalized);
+        return this.decode(denormalized, freeze);
     }
 
     async getVals(sha256array: Array<string>): Promise<Array<any>> {
@@ -462,9 +458,7 @@ export class ValStore {
         );
     }
 
-    async getValEntries(
-        sha256array: Array<string>
-    ): Promise<Map<string, any>> {
+    async getValEntries(sha256array: Array<string>): Promise<Map<string, any>> {
         const tuples = Promise.all(
             sha256array.map(async (sha256) => {
                 const tuple: [string, any] = [
@@ -494,8 +488,8 @@ export class ValStore {
         return this.recursiveEncode(object, new Map<any, any>());
     }
 
-    decode(object: Json): any {
-        return this.recursiveDecode(object);
+    decode(object: Json, freeze: boolean = true): any {
+        return this.recursiveDecode(object, freeze);
     }
 
     private recursiveEncode(object: any, visited: Map<any, any>): any {
@@ -515,7 +509,7 @@ export class ValStore {
         return encoded;
     }
 
-    private recursiveDecode(object: any): any {
+    private recursiveDecode(object: any, freeze: boolean = true): any {
         let decodedObj;
         if (object && typeof object === "object") {
             if (Array.isArray(object)) {
@@ -537,7 +531,11 @@ export class ValStore {
                 decodedObj[k] = this.recursiveDecode(object[k]);
             }
         }
-        return this.shallowDecode(decodedObj);
+        const decoded = this.shallowDecode(decodedObj);
+        if (freeze) {
+            Object.freeze(decoded);
+        }
+        return decoded;
     }
 
     // Returns a copy of `object` that has been encoded.
@@ -856,11 +854,10 @@ export abstract class VarStore {
         newSha256: string
     ): Promise<boolean>;
 
-    varListeners: Map<string, Map<string, VarUpdateCallback>> =
-        new Map();
+    varListeners: Map<string, Map<string, VarUpdateCallback>> = new Map();
     subscriptionIdToKey: Map<string, string> = new Map();
 
-    subscribeToUpdate(
+    subscribeToUpdates(
         name: string,
         namespace: string | null,
         callbackFn: VarUpdateCallback
@@ -875,7 +872,7 @@ export abstract class VarStore {
         return uuid;
     }
 
-    unsubscribeFromUpdate(subscriptionUUID: string): boolean {
+    unsubscribeFromUpdates(subscriptionUUID: string): boolean {
         const key = this.subscriptionIdToKey.get(subscriptionUUID);
         if (!key) {
             return false;
@@ -1265,10 +1262,7 @@ export class FileBackedVarStore extends VarStore {
             return false;
         }
         varStore[key] = valSha256;
-        fs.writeFileSync(
-            this.varStoreFileName,
-            JSON.stringify(varStore)
-        );
+        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
         release();
         return true;
     }
@@ -1288,10 +1282,7 @@ export class FileBackedVarStore extends VarStore {
             return false;
         }
         varStore[key] = valSha256;
-        fs.writeFileSync(
-            this.varStoreFileName,
-            JSON.stringify(varStore)
-        );
+        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
         release();
         return true;
     }
@@ -1574,11 +1565,11 @@ const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
 export class Val {
     __jsosValStore: ValStore;
     readonly __jsosSha256: string;
-    readonly __jsosObject: any;
+    readonly __jsosValObject: any;
 
     constructor(object: any, sha256: string, valStore: ValStore) {
         // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
-        this.__jsosObject = object;
+        this.__jsosValObject = object;
         this.__jsosValStore = valStore;
         this.__jsosSha256 = sha256;
         return new Proxy(this, {
@@ -1586,7 +1577,7 @@ export class Val {
                 if (Reflect.has(target, prop)) {
                     return Reflect.get(target, prop, receiver);
                 } else {
-                    const jsosObject = target.__jsosObject;
+                    const jsosObject = target.__jsosValObject;
                     if (jsosObject !== Object(jsosObject)) {
                         // If target.__jsosObject is a primitive, then it
                         // doesn't have a prop so Reflect.get breaks since it
@@ -1616,18 +1607,30 @@ export class Val {
     async __jsosUpdate(
         updateFn: AsyncValUpdateFn | SyncValUpdateFn
     ): Promise<Val> {
-        let newVal = updateFn(this.__jsosObject);
+        let newVal = updateFn(this.__jsosValObject);
         if (newVal instanceof Promise) {
             newVal = await newVal;
         }
-        return await NewVal(newVal, this.__jsosValStore);
+        return await NewVal({
+            object: newVal,
+            valStore: this.__jsosValStore,
+        });
     }
 
     async __jsosUpdateSync(
         updateFn: (currVal: any) => Promise<any>
     ): Promise<Val> {
-        const newVal = await updateFn(this.__jsosObject);
-        return await NewVal(newVal, this.__jsosValStore);
+        const newVal = await updateFn(this.__jsosValObject);
+        return await NewVal({
+            object: newVal,
+            valStore: this.__jsosValStore,
+        });
+    }
+
+    // Return a copy of this Val's underlying object.
+    // If `freeze` is true, the copy will be deeply frozen.:w
+    async __jsosObjectCopy(freeze: boolean = true): Promise<any> {
+        return await this.__jsosValStore.getVal(this.__jsosSha256, freeze);
     }
 
     __jsosEquals(other: Val): boolean {
@@ -1639,23 +1642,23 @@ export class Val {
     }
 }
 
-export async function NewVal<T>(
-    object: T,
-    valStore?: ValStore
-): Promise<T & Val> {
-    const vStore = valStore ?? DEFAULT_VALUE_STORE;
-    const [sha256, _] = await vStore.putVal(object);
-    const putVal = await vStore.getVal(sha256);
-    return new Val(putVal, sha256, vStore) as T & Val;
+export async function NewVal<T>(options: {
+    object: T;
+    valStore?: ValStore;
+}): Promise<T & Val> {
+    const { object, valStore = DEFAULT_VALUE_STORE } = options;
+    const [sha256, __] = await valStore.putVal(object);
+    const putVal = await valStore.getVal(sha256);
+    return new Val(putVal, sha256, valStore) as T & Val;
 }
 
-export async function ValFromSha256(
-    sha256: string,
-    valStore?: ValStore
-): Promise<Val> {
-    const vStore = valStore ?? DEFAULT_VALUE_STORE;
-    const obj = await vStore.getVal(sha256);
-    return new Val(obj, sha256, vStore);
+export async function ValFromSha256(options: {
+    sha256: string;
+    valStore?: ValStore;
+}): Promise<Val> {
+    const { sha256, valStore = DEFAULT_VALUE_STORE } = options;
+    const obj = await valStore.getVal(sha256);
+    return new Val(obj, sha256, valStore);
 }
 
 // A shared mutable object.
@@ -1708,22 +1711,23 @@ export interface Var {
     __jsosNamespace: string | null;
     __jsosVal: Val;
     __jsosParentVal?: Val;
+    __jsosAutoPullUpdates: boolean;
+    // TODO: implement IsConst, ReadOnly, and Pull()
     // If true, this Var behaves like a named Val by making it immutable.
     // To make changes one has to update the Var to make this false.
     // Note that this does *not* make the var immutable in the VarStore,
     // just immutable via this Var object.
-    __jsosIsConst: boolean;
-    __jsosSubscribeToUpdates: boolean;
+    //__jsosIsConst: boolean;
     // while true, causes local mutations to this var to fail, though remote
     // changes can still be pulled in. This is a useful guard against accidental
     // updates.
-    __jsosIsReadOnly: boolean;
+    //__jsosIsReadOnly: boolean;
     // Fetch Val from VarStore and set __jsosVal to it,
     // overwriting whaterver val is there. This will throw an error if
     // __jsosIsConst is true. Pulling updates is useful when
-    // __jsosSubscribeToUpdates is false, in which case it gives you
+    // __jsosAutoPullUpdates is false, in which case it gives you
     // control over when to sync this Var to the shared val.
-    __jsosPull(): void;
+    //__jsosPull(): void;
 }
 
 export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
@@ -1739,25 +1743,79 @@ export class Var {
     __jsosName: string;
     __jsosNamespace: string | null;
     __jsosVal: Val;
-    __jsosSyncObj: any;
+    // __jsosVarObj is a local in-memory object that can be synchronously updated by the user via proxy methods on this Var.
+    // Updates to it are pushed async to the VarStore, and it can be updated in the other direction via either __jsosPull() or
+    // by subscribing to updates. If push fails due to optimistic concurrency control, then an error is thrown.
+    __jsosVarObj: any;
     __jsosParentVal?: Val;
-    __jsosSubscribeToUpdates: boolean;
+    __jsosAutoPullUpdates: boolean;
+    __jsosSubscriptionIDs: Array<string>;
 
     constructor(
         name: string,
-        namespace: string | null = null,
-        val: Val,
+        namespace: string | null,
+        jsosVal: Val,
+        object: any,
         varStore: VarStore,
-        subscribeToUpdates: boolean,
+        autoPullUpdates: boolean,
+        callback: VarUpdateCallback | null = null,
         parentVal?: Val
     ) {
         this.__jsosVarStore = varStore;
         this.__jsosName = name;
         this.__jsosNamespace = namespace;
-        this.__jsosVal = val;
-        this.__jsosSyncObj = val.__jsosObject;
-        this.__jsosSubscribeToUpdates = subscribeToUpdates;
+        this.__jsosVal = jsosVal;
+        this.__jsosVarObj = object;
+        this.__jsosAutoPullUpdates = autoPullUpdates;
+        this.__jsosSubscriptionIDs = [];
         this.__jsosParentVal = parentVal;
+        if (autoPullUpdates) {
+            const newSub = this.__jsosVarStore.subscribeToUpdates(
+                name,
+                namespace,
+                async (
+                    name: string,
+                    namespace: string | null,
+                    oldSha256: string | null,
+                    newSha256: string
+                ): Promise<void> => {
+                    if (
+                        name === this.__jsosName &&
+                        namespace === this.__jsosNamespace
+                    ) {
+                        this.__jsosVal = await ValFromSha256({
+                            sha256: newSha256,
+                            valStore: this.__jsosVal.__jsosValStore,
+                        });
+                        this.__jsosVarObj =
+                            await this.__jsosVal.__jsosObjectCopy(false);
+                        console.debug(
+                            `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace} ` +
+                                `updated via subscription: oldSha256=${oldSha256}, newSha256=${newSha256}`
+                        );
+                        if (oldSha256 !== this.__jsosVal.__jsosSha256) {
+                            console.debug(
+                                "NOTE: skipping lineage during update from subscription: " +
+                                    "oldSha256 !== Var's current __jsosSha256"
+                            );
+                        }
+                    }
+                }
+            );
+            this.__jsosSubscriptionIDs.concat(newSub);
+            if (callback) {
+                this.__jsosSubscriptionIDs.concat(
+                    this.__jsosVarStore.subscribeToUpdates(
+                        name,
+                        namespace,
+                        callback
+                    )
+                );
+            }
+            console.log(
+                `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace}) subscribed to updates.`
+            );
+        }
         // TODO? explicity list all the properties that we want to intercept
         //       and pass everything else through.
 
@@ -1766,13 +1824,11 @@ export class Var {
                 if (Reflect.has(target, prop)) {
                     console.log("intercepting ", prop);
                     return Reflect.get(target, prop, receiver);
-                } else {
+                } else if (Reflect.has(target.__jsosVarObj, prop)) {
                     console.log("passing through ", prop);
-                    return Reflect.get(
-                        target.__jsosVal.__jsosObject,
-                        prop,
-                        receiver
-                    );
+                    return Reflect.get(target.__jsosVarObj, prop, receiver);
+                } else {
+                    return Reflect.get(target.__jsosVal, prop, receiver);
                 }
             },
             set: (target, prop, val, receiver) => {
@@ -1780,37 +1836,38 @@ export class Var {
                     console.log("intercepting set for ", prop);
                     return Reflect.set(target, prop, val, receiver);
                 } else {
-                    console.log(
-                        "passing through set for ",
-                        prop,
-                        " to ",
-                        val
-                    );
+                    console.log("passing through set for ", prop, " to ", val);
                     const setRes = Reflect.set(
-                        target.__jsosSyncObj,
+                        target.__jsosVarObj,
                         prop,
                         val,
-                        receiver
+                        target.__jsosVarObj
                     );
                     (async () => {
                         const oldSha256 = target.__jsosVal.__jsosSha256;
-                        this.__jsosVal = await this.__jsosVal.__jsosUpdate(
-                            (_) => this.__jsosVal.__jsosObject
+                        receiver.__jsosVal = await this.__jsosVal.__jsosUpdate(
+                            (_) => this.__jsosVarObj
                         );
                         console.log(
                             "asynchronously updated __jsosVal to ",
-                            this.__jsosVal
+                            receiver.__jsosVal
                         );
-                        if (oldSha256 !== this.__jsosVal.__jsosSha256) {
-                            await this.__jsosVarStore.updateVar(
-                                this.__jsosName,
-                                this.__jsosNamespace,
-                                oldSha256,
-                                this.__jsosVal.__jsosSha256
-                            );
+                        if (oldSha256 !== receiver.__jsosVal.__jsosSha256) {
+                            const updateVarRes =
+                                await receiver.__jsosVarStore.updateVar(
+                                    receiver.__jsosName,
+                                    receiver.__jsosNamespace,
+                                    oldSha256,
+                                    receiver.__jsosVal.__jsosSha256
+                                );
+                            if (!updateVarRes) {
+                                throw Error(
+                                    `Failed to update var ${receiver.__jsosName} in VarStore.`
+                                );
+                            }
                             console.log(
                                 "asynchronously updated __jsosVarStore to ",
-                                this.__jsosVal.__jsosSha256
+                                receiver.__jsosVal.__jsosSha256
                             );
                         }
                     })();
@@ -1832,86 +1889,157 @@ export class Var {
 // Create a new Var object.  If val is a `Val` object, then this
 // just directly uses its sha256.  Else this calls `Val.create(val)`
 // which creates a new Val in the ValStore and then uses its sha256 for
-// the Var.  Throws error if the Var already exists in the
-// VarStore or if a Val is provided that has a
-export async function NewVar<T>(
-    name: string,
-    val: T,
-    namespace: string | null = null,
-    valStore?: ValStore,
-    varStore?: VarStore,
-    subscribeToUpdates: boolean = true
-): Promise<T & Var> {
-    const vlStore = valStore ?? DEFAULT_VALUE_STORE;
-    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
+// the Var.  Throws error if the Var already exists in the VarStore.
+// If updateCallback is provided, it will be called
+export async function NewVar<T>(options: {
+    name: string;
+    namespace?: string;
+    val: T;
+    valStore?: ValStore;
+    varStore?: VarStore;
+    autoPullUpdates?: boolean;
+    callback?: VarUpdateCallback;
+}): Promise<T & Var & Val> {
+    const {
+        name,
+        namespace = null,
+        val,
+        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VARIABLE_STORE,
+        autoPullUpdates = true,
+        callback,
+    } = options;
     let forSureAVal: Val & T;
     if (val instanceof Val) {
         console.log("already a Val");
         forSureAVal = val;
     } else {
-        forSureAVal = await NewVal(val, vlStore);
+        forSureAVal = await NewVal({ object: val, valStore });
         console.log("turned non-Val into Val");
     }
-    const newVarRes = vrStore.newVar(
+    let obj: any = await forSureAVal.__jsosObjectCopy(false);
+    const newVarRes = varStore.newVar(
         name,
         namespace,
         forSureAVal.__jsosSha256
     );
     if (!newVarRes) {
-        if (await vrStore.getVar(name, namespace)) {
+        if (await varStore.getVar(name, namespace)) {
             throw Error(`Var ${name} already exists in VarStore`);
         }
         throw Error("Failed to create new var in VarStore");
     }
-    return (new Var(
+    return new Var(
         name,
         namespace,
         forSureAVal,
-        vrStore,
-        subscribeToUpdates
-    ) as T & Var);
+        obj,
+        varStore,
+        autoPullUpdates,
+        callback
+    ) as T & Var & Val;
 }
 
 // returns undefined if the Var does not exist in the VarStore.
-export async function GetVar(
-    name: string,
-    namespace: string | null = null,
-    valStore?: ValStore,
-    varStore?: VarStore,
-    subscribeToUpdates: boolean = true
-): Promise<any> {
-    const vlStore = valStore ?? DEFAULT_VALUE_STORE;
-    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
-    const valSha256 = await vrStore.getVar(name, namespace);
+export async function GetVar(options: {
+    name: string;
+    namespace?: string;
+    valStore?: ValStore;
+    varStore?: VarStore;
+    autoPullUpdates?: boolean;
+    callback?: VarUpdateCallback;
+}): Promise<any> {
+    const {
+        name,
+        namespace = null,
+        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VARIABLE_STORE,
+        autoPullUpdates = true,
+        callback,
+    } = options;
+    const valSha256 = await varStore.getVar(name, namespace);
     if (valSha256 === undefined) {
         return undefined;
     }
-    const val = await ValFromSha256(valSha256, vlStore);
-    return new Var(name, namespace, val, vrStore, subscribeToUpdates) as any;
+    const val = await ValFromSha256({ sha256: valSha256, valStore });
+    const mutableObjCopy = await val.__jsosObjectCopy(false);
+    return new Var(
+        name,
+        namespace,
+        val,
+        mutableObjCopy,
+        varStore,
+        autoPullUpdates
+    ) as any;
 }
 
-export async function GetVarFromVal(
-    name: string,
-    val: Val,
-    namespace: string | null = null,
-    varStore?: VarStore,
-    subscribeToUpdates: boolean = true
-): Promise<any> {
-    const vrStore = varStore ?? DEFAULT_VARIABLE_STORE;
-    return new Var(name, namespace, val, vrStore, subscribeToUpdates) as any;
+export async function GetVarFromVal(options: {
+    name: string;
+    namespace?: string;
+    val: Val;
+    varStore?: VarStore;
+    autoPullUpdates?: boolean;
+    callback?: VarUpdateCallback;
+}): Promise<any> {
+    const {
+        name,
+        namespace = null,
+        val,
+        varStore = DEFAULT_VARIABLE_STORE,
+        autoPullUpdates = true,
+        callback,
+    } = options;
+    const mutableObjCopy = await val.__jsosObjectCopy(false);
+    return new Var(
+        name,
+        namespace,
+        val,
+        mutableObjCopy,
+        varStore,
+        autoPullUpdates,
+        callback
+    ) as any;
 }
 
-//export async function GetOrNewVar (
-//    name: string,
-//    namespace: string | null = null,
-//    defaultVal: any,
-//    valStore?: ValStore,
-//    varStore?: VarStore,
-//) {
-//    const varStore = varStore ?? DEFAULT_VARIABLE_STORE;
-//    const val = await Var.get(name, namespace, valStore, varStore);
-//    FINISH ME
-//}
+export async function GetOrNewVar(options: {
+    name: string;
+    namespace?: string;
+    defaultVal: any;
+    valStore?: ValStore;
+    varStore?: VarStore;
+    autoPullUpdates?: boolean;
+    callback?: VarUpdateCallback;
+}) {
+    const {
+        name,
+        namespace,
+        defaultVal,
+        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VARIABLE_STORE,
+        autoPullUpdates = true,
+        callback,
+    } = options;
+    const val = await GetVar({
+        name,
+        namespace,
+        valStore,
+        varStore,
+        autoPullUpdates,
+        callback,
+    });
+    if (val !== undefined) {
+        return val;
+    }
+    return await NewVar({
+        name,
+        namespace,
+        val: defaultVal,
+        valStore,
+        varStore,
+        autoPullUpdates,
+        callback,
+    });
+}
 
 //        /* If this var exists already, fetch & return it. Else create it and
 //         * initialize it to wrap Val(null) */
