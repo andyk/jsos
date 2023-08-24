@@ -1,22 +1,43 @@
-import React, { useEffect } from 'react';
-import { Var, Val, GetOrNewVar } from './jsos';
+import React, { useEffect } from "react";
+import { Var, Val, GetOrNewVar } from "./jsos";
 
-export const DataContext = React.createContext<Array<Val|Function|null>>([]);
+type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
-export default function JsosContextProvider(
-    { children, name, namespace }:
-    { children: React.ReactNode, name: string, namespace: string }
-) {
-    const [jsosVar, setJsosVar] = React.useState<null | Var >(null);
-    const [appData, setAppData] = React.useState<{[key: string]: null | Val}>({ pObject: null });
+export const DataContext = React.createContext<Array<Val | Function | null>>(
+    []
+);
 
-    function varChanged(newObj: any, newSha256) {
-        console.log("varChanged triggered: ", newObj, newSha1)
-        setAppData({ pObject: newObj })
+export default function JsosContextProvider({
+    children,
+    name,
+    namespace,
+}: {
+    children: React.ReactNode;
+    name: string;
+    namespace: string;
+}) {
+    const [jsosVar, setJsosVar] = React.useState<null | ResolvedType<ReturnType<typeof GetOrNewVar>>>(null);
+    const [appData, setAppData] = React.useState<{ [key: string]: null | Val }>(
+        { pObject: null }
+    );
+
+    function varChanged(
+        name: string,
+        namespace: string | null,
+        newSha256: string | null,
+        oldSha256: string
+    ) {
+        console.log("varChanged triggered: ", oldSha256, newSha256);
+        setAppData({ pObject: jsosVar?.__jsosVal || null });
     }
     useEffect(() => {
         (async () => {
-            let fetchedVar = await GetOrNewVar('appData', null, "benw-trivia",  varChanged);
+            let fetchedVar = await GetOrNewVar({
+                name: "appData",
+                namespace: "benw-trivia",
+                defaultVal: null,
+                callback: varChanged,
+            });
             setJsosVar(fetchedVar);
             console.log("finished init setAppData to: ", fetchedVar);
         })();
@@ -25,16 +46,16 @@ export default function JsosContextProvider(
     useEffect(() => {
         console.log("jsosVar changed: ", jsosVar);
         (async () => {
-            let pObj = jsosVar === null ? null : await jsosVar.get();
+            let pObj = jsosVar?.__jsosVal || null;
             console.log("jsosVar update triggered: setting pObj: ", pObj);
             setAppData({ pObject: pObj });
         })();
     }, [jsosVar]);
 
-    async function updatePObject(updateFun) {
+    async function updatePObject(updateFun: (oldObj: any) => any) {
         if (jsosVar !== null) {
-            const newPObj = await jsosVar.update(updateFun);
-            setAppData({ pObject: newPObj });
+            jsosVar.__jsosUpdate(updateFun)
+            setAppData({ pObject: jsosVar?.__jsosVal || null });
         }
     }
 

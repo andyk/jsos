@@ -10,7 +10,7 @@ import {
     ValFromSha256,
     NewVar,
     GetVar,
-    GetVarFromVal,
+    DeleteVar,
     Var,
     DEFAULT_VARIABLE_STORE,
 } from "../src/jsos";
@@ -127,7 +127,7 @@ test("VarStore basics", async () => {
 
 test("Val basics", async () => {
     const init = [1, 2, 3];
-    const v = await NewVal({ object: init});
+    const v = await NewVal({ object: init });
     expect(v.__jsosValObject).toEqual(init);
     expect(v[0]).toBe(1);
     expect(v[2]).toBe(3);
@@ -140,37 +140,47 @@ test("Val basics", async () => {
     expect(updated.__jsosValObject).toEqual([1, 2, 3, 4]);
     expect(v.__jsosSha256).not.toBe(updated.__jsosSha256);
 
-    const strVal: any = await NewVal({object: "a string"});
+    const strVal: any = await NewVal({ object: "a string" });
     const newStr = await strVal.__jsosUpdate(
         (oldVal: string) => oldVal + " with more"
     );
     expect(newStr.__jsosValObject).toBe("a string with more");
 
-    const boolVal: any = await NewVal({object: true});
+    const boolVal: any = await NewVal({ object: true });
     const newBool = await boolVal.__jsosUpdate(
         (oldVal: boolean) => oldVal && false
     );
     expect(newBool.__jsosValObject).toBe(false);
 });
 
-test("Var basics", async () => {
-    const init = [1, 2, 3];
-    const v = await NewVar({name: "myVar", val: init});
-    //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
-    const v2 = await GetVar({name: "myVar"});
-    expect(v2).toBeDefined();
-    expect(v.__jsosEquals(v2)).toBe(true);
-    const v3 = await GetVarFromVal({name: "name2", val: await NewVal({object: [1, 2, 3]})});
-    expect(v.__jsosSha256).toEqual(v3.__jsosSha256);
-    expect(v[0]).toBe(1);
-    v[3] = 4;
-    expect(v[3]).toBe(4);
-    expect(v.length).toBe(4);
-    function sleep(ms: number) {
-        return new Promise((resolve) => setTimeout(resolve, ms));
-    }
-    await sleep(1); // Little surprising, but 1ms seems to give enough time for the async update to happen.
-    expect(v2.length).toBe(4);
+describe('Creates supabase state', () => {
+    beforeAll(async () => {
+      await DeleteVar({ name: "myTestVar" });
+    });
+
+    test("Var basics", async () => {
+        const init = [1, 2, 3];
+        const v = await NewVar({ name: "myTestVar", val: init });
+        //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
+        const v2 = await GetVar({ name: "myTestVar" });
+        expect(v2).toBeDefined();
+        expect(v.__jsosEquals(v2)).toBe(true);
+        const v3 = await NewVar({ // test to be sure creating Var from existing Val works.
+            name: "name2",
+            val: await NewVal({ object: [1, 2, 3] }),
+        });
+        expect(v3).toBeDefined();
+        expect(v3.__jsosSha256).toEqual(v.__jsosSha256);
+        expect(v[0]).toBe(1);
+        v[3] = 4;
+        expect(v[3]).toBe(4);
+        expect(v.length).toBe(4);
+        function sleep(ms: number) {
+            return new Promise((resolve) => setTimeout(resolve, ms));
+        }
+        await sleep(7500); // With supabase, 500ms wasn't enough time.
+        expect(v2.length).toBe(4);
+    }, 10000000);
 });
 
 //test('Testing normalized put & get of an array', (done) => {

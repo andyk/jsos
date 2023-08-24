@@ -1,5 +1,9 @@
 /// <reference path="./idb-keyval.d.ts" />
-import { SupabaseClient, RealtimeChannel } from "@supabase/supabase-js";
+import {
+    SupabaseClient,
+    RealtimeChannel,
+    RealtimePostgresUpdatePayload,
+} from "@supabase/supabase-js";
 import {
     Collection,
     List,
@@ -8,7 +12,7 @@ import {
     OrderedMap,
     OrderedSet,
     Stack,
-    Record,
+    Record as ImmutableRecord,
 } from "immutable";
 import { v4 as uuidv4 } from "uuid";
 import * as fs from "fs";
@@ -105,6 +109,7 @@ const VARIABLE_STR_KEY_PREFIX = "~#jVar";
 const STR_KEY_SEP = "~#~#~";
 const DEFAULT_OBJECTS_TABLE_NAME = "jsos_objects";
 const DEFAULT_VARIABLES_TABLE_NAME = "jsos_vars";
+const DEFAULT_VARIABLES_OBJECT_KEY_COL = "val_sha256";
 
 // Re-using special strings for encoding immutables from
 // https://github.com/glenjamin/transit-immutable-js
@@ -123,6 +128,10 @@ const BUILTIN_MAP_KEY = "~#bM";
 const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
+
+function isNotEmptyObject(obj: any): obj is Record<string, any> {
+    return Object.keys(obj).length !== 0;
+}
 
 function isPrimitive(val: any): val is Primitive {
     return (
@@ -592,7 +601,7 @@ export class ValStore {
         if (Stack.isStack(object)) {
             return [STACK_KEY, object.toArray()];
         }
-        if (Record.isRecord(object)) {
+        if (ImmutableRecord.isRecord(object)) {
             throw "Immutable.Record serialization not yet supported.";
             //return [RECORD_KEY, object.toObject()];
         }
@@ -854,6 +863,12 @@ export abstract class VarStore {
         newSha256: string
     ): Promise<boolean>;
 
+    // Return true if the Var was found and deleted. False otherwise.
+    abstract deleteVar(
+        name: string,
+        namespace: string | null
+    ): Promise<boolean>;
+
     varListeners: Map<string, Map<string, VarUpdateCallback>> = new Map();
     subscriptionIdToKey: Map<string, string> = new Map();
 
@@ -893,6 +908,35 @@ export abstract class VarStore {
             this.varListeners.get(key)?.forEach((cb) => {
                 cb(name, namespace, oldSha256, newSha256);
             });
+        }
+    }
+}
+
+export class InMemoryJsonStore extends JsonStore {
+    private valMap: Map<string, any>;
+
+    constructor() {
+        super();
+        this.valMap = new Map();
+    }
+
+    async hasJson(sha256: string): Promise<boolean> {
+        return this.valMap.has(sha256);
+    }
+
+    async getJson(sha256: string): Promise<any> {
+        return this.valMap.get(sha256);
+    }
+
+    async putJson(object: any): Promise<string> {
+        const sha256 = getSha256(object);
+        this.valMap.set(sha256, object);
+        return sha256;
+    }
+
+    async deleteJson(sha256: string): Promise<void> {
+        if (this.valMap.has(sha256)) {
+            this.valMap.delete(sha256);
         }
     }
 }
@@ -953,34 +997,16 @@ export class InMemoryVarStore extends VarStore {
             return true;
         });
     }
-}
 
-export class InMemoryJsonStore extends JsonStore {
-    private valMap: Map<string, any>;
-
-    constructor() {
-        super();
-        this.valMap = new Map();
-    }
-
-    async hasJson(sha256: string): Promise<boolean> {
-        return this.valMap.has(sha256);
-    }
-
-    async getJson(sha256: string): Promise<any> {
-        return this.valMap.get(sha256);
-    }
-
-    async putJson(object: any): Promise<string> {
-        const sha256 = getSha256(object);
-        this.valMap.set(sha256, object);
-        return sha256;
-    }
-
-    async deleteJson(sha256: string): Promise<void> {
-        if (this.valMap.has(sha256)) {
-            this.valMap.delete(sha256);
+    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+        const key = _toVarKey(name, namespace);
+        if (!this.varMap.has(key)) {
+            return false;
         }
+        await this.mutex.runExclusive(async () => {
+            this.varMap.delete(key);
+        });
+        return true;
     }
 }
 
@@ -1162,6 +1188,15 @@ export class BrowserLocalStorageVarStore extends VarStore {
     async getVar(name: string, namespace: string | null) {
         return localStorage.getItem(_toVarKey(name, namespace)) || undefined;
     }
+
+    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+        const currSha256 = await this.getVar(name, namespace);
+        if (!currSha256) {
+            return false;
+        }
+        localStorage.removeItem(_toVarKey(name, namespace));
+        return true;
+    }
 }
 
 // An in-memory object store backed by a local file (not available in browser)
@@ -1270,7 +1305,8 @@ export class FileBackedVarStore extends VarStore {
     async updateVar(
         name: string,
         namespace: string | null,
-        valSha256: string
+        oldSha256: string,
+        newSha256: string
     ): Promise<boolean> {
         const release = await lockfile.lock(
             this.varStoreFileName,
@@ -1278,10 +1314,10 @@ export class FileBackedVarStore extends VarStore {
         );
         const varStore = this.readVarStoreFile();
         const key = _toVarKey(name, namespace);
-        if (key in varStore && varStore[key] !== valSha256) {
+        if (key in varStore && varStore[key] !== oldSha256) {
             return false;
         }
-        varStore[key] = valSha256;
+        varStore[key] = newSha256;
         fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
         release();
         return true;
@@ -1298,6 +1334,22 @@ export class FileBackedVarStore extends VarStore {
         const varStore = this.readVarStoreFile();
         release();
         return varStore[_toVarKey(name, namespace)];
+    }
+
+    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+        const release = await lockfile.lock(
+            this.varStoreFileName,
+            LOCKFILE_OPTIONS
+        );
+        const varStore = this.readVarStoreFile();
+        const key = _toVarKey(name, namespace);
+        if (!(key in varStore)) {
+            return false;
+        }
+        delete varStore[key];
+        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+        release();
+        return true;
     }
 }
 
@@ -1398,169 +1450,240 @@ class SupabaseJsonStore extends JsonStore {
     }
 }
 
-//class SupabaseVarStore extends VarStore {
-//    supabaseClient: SupabaseClient;
-//    varsTableName: string;
-//    //supabaseSubcriptions: { RealtimeChannel[];
-//    //__jsosUpdateCallback: VarUpdateCallback | null;
-//    //    updateCallback?: VarUpdateCallback | null
-//    //    this.__jsosUpdateCallback = updateCallback;
-//    //    updateCallback?: (newVal: any, newSha256: string) => void
-//
-//    constructor(
-//        supabaseClient: SupabaseClient,
-//        varsTableName: string = DEFAULT_VARIABLES_TABLE_NAME
-//    ) {
-//        super();
-//        this.supabaseClient = supabaseClient;
-//        this.varsTableName = varsTableName;
-//        //this.__jsosSupabaseSubcription = null;
-//    }
-//
-//    //get supabaseSubscription(): RealtimeChannel | null {
-//    //    return this.__jsosSupabaseSubcription;
-//    //}
-//
-//    //subscribed(): boolean {
-//    //    return (
-//    //        this.__jsosSupabaseSubcription !== null &&
-//    //        this.__jsosSupabaseSubcription !== undefined
-//    //    );
-//    //}
-//
-//    //subscribeToSupabase = async (force: boolean = false) => {
-//    //    //Subscribe to updates from supabase.
-//    //    if (this.subscribed()) {
-//    //        return;
-//    //    }
-//    //    const remoteSha256 = await this.jsosClient.getSha256FromVar(
-//    //        this.name,
-//    //        this.namespace
-//    //    );
-//    //    if (this.objectSha256 !== remoteSha256) {
-//    //        console.debug(
-//    //            "remote sha256 for var name " +
-//    //                this.name +
-//    //                " is " +
-//    //                remoteSha256 +
-//    //                " but local sha256 is " +
-//    //                this.objectSha256
-//    //        );
-//    //        if (force) {
-//    //            console.debug(
-//    //                "force=true, so updating local sha256 to match remote sha256."
-//    //            );
-//    //            this.objectSha256 = remoteSha256;
-//    //        } else {
-//    //            console.error(
-//    //                "force=false, and out of sync w/ remote, so not subscribing " +
-//    //                    "to supabase updates. You may want to re-run subscribeToSupabase() " +
-//    //                    "with force=true to update the local sha256 to match the remote sha256."
-//    //            );
-//    //        }
-//    //    }
-//    //    this.__jsosSupabaseSubcription = await this.jsosClient.supabaseClient
-//    //        .channel("any")
-//    //        .on(
-//    //            "postgres_changes",
-//    //            {
-//    //                event: "*",
-//    //                schema: "public",
-//    //                table: this.jsosClient.varsTableName,
-//    //                filter: `name=eq.${this.name}`,
-//    //            },
-//    //            async (payload) => {
-//    //                if (payload.new["namespace"] === this.namespace) {
-//    //                    this.objectSha256 = payload.new["object"];
-//    //                }
-//    //                if (this.updateCallback) {
-//    //                    this.updateCallback(
-//    //                        await this.get(),
-//    //                        payload.new["object"]
-//    //                    );
-//    //                }
-//    //            }
-//    //        )
-//    //        .subscribe();
-//    //    /*.subscribe((status: string, err: Error) => {
-//    //            if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
-//    //                console.error(
-//    //                    `Error subscribing to supabase updates for var name ${this.name}: `,
-//    //                    status
-//    //                );
-//    //                if (err) {
-//    //                    console.error("Error from supabase subscription: ", err);
-//    //                }
-//    //                this.#supabaseSubcription = null;
-//    //            }
-//    //        });
-//    //        */
-//    //};
-//
-//    async getVar(
-//        name: string,
-//        namespace: string | null = null
-//    ): Promise<string | undefined> {
-//        let queryBuilder = this.supabaseClient
-//            .from(this.varsTableName)
-//            .select("object")
-//            .eq("name", name);
-//        // Use "is" for NULL and "eq" for non-null
-//        queryBuilder =
-//            namespace === null
-//                ? queryBuilder.is("namespace", namespace)
-//                : queryBuilder.eq("namespace", namespace);
-//        let { data: row, error } = await queryBuilder.maybeSingle();
-//        if (error) {
-//            throw error;
-//        }
-//        if (row) {
-//            Object.freeze(row.object);
-//            return row.object;
-//        }
-//    }
-//
-//    async newVar(
-//        name: string,
-//        namespace: string | null,
-//        oldSha256: string,
-//        sha256: string
-//    ): Promise<boolean> {
-//        const { data: row, error } = await this.supabaseClient
-//            .from(this.varsTableName)
-//            .insert({ name: name, namespace: namespace, object: sha256 })
-//            .select("val_sha256")
-//            .maybeSingle();
-//        if (error) {
-//            if (error.code === "23505") {
-//                // Reference with name this name, namespace, & `object` already exists in database.
-//                const { data: row, error } = await this.supabaseClient
-//                    .from(this.varsTableName)
-//                    .select("object")
-//                    .eq("name", name)
-//                    .eq("namespace", namespace)
-//                    .maybeSingle();
-//                if (error) {
-//                    throw error;
-//                }
-//                if (row && row.object === sha256) {
-//                    return true;
-//                }
-//                throw new Error(
-//                    `Val with sha256 ${sha256} already in database but could not be fetched.`
-//                );
-//            }
-//        }
-//        if (row) {
-//            return true;
-//        }
-//    };
-//}
+class SupabaseVarStore extends VarStore {
+    supabaseClient: SupabaseClient;
+    varsTableName: string;
+    supabaseSubscription: RealtimeChannel | null;
 
-//const DEFAULT_VALUE_STORE = new ValStore(
-//    new MultiJsonStore([new InMemoryJsonStore()])
-//);
-const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
+    constructor(
+        supabaseClient: SupabaseClient,
+        varsTableName: string = DEFAULT_VARIABLES_TABLE_NAME
+    ) {
+        super();
+        this.supabaseClient = supabaseClient;
+        this.varsTableName = varsTableName;
+        this.supabaseSubscription = null;
+        this.subscribeToSupabase();
+    }
+
+    //get supabaseSubscription(): RealtimeChannel | null {
+    //    return this.__jsosSupabaseSubcription;
+    //}
+
+    subscribedToSupabase(): boolean {
+        return (
+            this.supabaseSubscription !== null &&
+            this.supabaseSubscription !== undefined
+        );
+    }
+
+    // Returns true if already subscribed or subcribe was successful.
+    subscribeToSupabase(): boolean {
+        if (this.supabaseSubscription) {
+            return true;
+        }
+        this.supabaseSubscription = this.supabaseClient
+            .channel("any")
+            .on<{
+                name: string;
+                namespace: string | null;
+                [DEFAULT_VARIABLES_OBJECT_KEY_COL]: string;
+            }>(
+                "postgres_changes",
+                {
+                    event: "*",
+                    schema: "public",
+                    table: this.varsTableName,
+                },
+                async (payload) => {
+                    if (
+                        isNotEmptyObject(payload.new) &&
+                        isNotEmptyObject(payload.old)
+                    ) {
+                        if (
+                            payload.new.name !== payload.old.name ||
+                            payload.new.namespace !== payload.old.namespace
+                        ) {
+                            throw Error(
+                                "Received an illegal update via supabase subscription: " +
+                                    `Name and/or namespace changed. ${JSON.stringify(
+                                        payload
+                                    )}`
+                            );
+                        }
+                        console.log(
+                            "SupabaseVarStore Notifying listeners of var update..."
+                        );
+                        this.notifyListeners(
+                            payload.old["name"],
+                            payload.old["namespace"],
+                            payload.old[DEFAULT_VARIABLES_OBJECT_KEY_COL],
+                            payload.new[DEFAULT_VARIABLES_OBJECT_KEY_COL]
+                        );
+                    }
+                }
+            )
+            .subscribe();
+        return true;
+        /*.subscribe((status: string, err: Error) => {
+                if (status === "TIMED_OUT" || status === "CHANNEL_ERROR") {
+                    console.error(
+                        `Error subscribing to supabase updates for var name ${this.name}: `,
+                        status
+                    );
+                    if (err) {
+                        console.error("Error from supabase subscription: ", err);
+                    }
+                    this.#supabaseSubcription = null;
+                }
+            });
+            */
+    }
+
+    async getVar(
+        name: string,
+        namespace: string | null = null
+    ): Promise<string | undefined> {
+        let queryBuilder = this.supabaseClient
+            .from(this.varsTableName)
+            .select(DEFAULT_VARIABLES_OBJECT_KEY_COL)
+            .eq("name", name);
+        // Use "is" for NULL and "eq" for non-null
+        queryBuilder =
+            namespace === null
+                ? queryBuilder.is("namespace", namespace)
+                : queryBuilder.eq("namespace", namespace);
+        const { data: row, error } = await queryBuilder.maybeSingle();
+        if (error) {
+            throw error;
+        }
+        if (row) {
+            Object.freeze(row[DEFAULT_VARIABLES_OBJECT_KEY_COL]);
+            return row[DEFAULT_VARIABLES_OBJECT_KEY_COL];
+        }
+    }
+
+    async newVar(
+        name: string,
+        namespace: string | null,
+        valSha256: string
+    ): Promise<boolean> {
+        const { data: row, error } = await this.supabaseClient
+            .from(this.varsTableName)
+            .insert({
+                name: name,
+                namespace: namespace,
+                [DEFAULT_VARIABLES_OBJECT_KEY_COL]: valSha256,
+            })
+            .select(DEFAULT_VARIABLES_OBJECT_KEY_COL)
+            .maybeSingle();
+        if (error) {
+            if (error.code === "23505") {
+                // Reference with name this name, namespace, & `object` already exists in database.
+                let queryBuilder = this.supabaseClient
+                    .from(this.varsTableName)
+                    .select(DEFAULT_VARIABLES_OBJECT_KEY_COL)
+                    .eq("name", name);
+                queryBuilder =
+                    namespace === null
+                        ? queryBuilder.is("namespace", namespace)
+                        : queryBuilder.eq("namespace", namespace);
+                const { data: row, error } = await queryBuilder.maybeSingle();
+                if (error) {
+                    throw error;
+                }
+                if (
+                    row &&
+                    row[DEFAULT_VARIABLES_OBJECT_KEY_COL] === valSha256
+                ) {
+                    return true;
+                }
+                throw new Error(
+                    `Val with sha256 ${valSha256} already in database but could not be fetched.`
+                );
+            }
+        }
+        if (row) {
+            return true;
+        }
+        return false;
+    }
+
+    async updateVar(
+        name: string,
+        namespace: string | null,
+        oldSha256: string,
+        newSha256: string
+    ): Promise<boolean> {
+        let queryBuilder = this.supabaseClient
+            .from(this.varsTableName)
+            .update({ [DEFAULT_VARIABLES_OBJECT_KEY_COL]: newSha256 })
+            .eq("name", name)
+            .eq(DEFAULT_VARIABLES_OBJECT_KEY_COL, oldSha256);
+        // use "is" to test against null and "eq" for non-null.
+        queryBuilder =
+            namespace === null
+                ? queryBuilder.is("namespace", namespace)
+                : queryBuilder.eq("namespace", namespace);
+        const { data: row, error } = await queryBuilder.select().maybeSingle();
+        if (error) {
+            throw error;
+        }
+        if (row) {
+            return true;
+        }
+        console.debug(
+            "no row with name=" +
+                name +
+                " namespace=" +
+                namespace +
+                " and val_sha256=" +
+                oldSha256 +
+                " found in supabase table " +
+                this.varsTableName +
+                "."
+        );
+        return false;
+    }
+
+    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+        let queryBuilder = this.supabaseClient
+            .from(this.varsTableName)
+            .delete()
+            .eq("name", name);
+        // use "is" to test against null and "eq" for non-null.
+        queryBuilder =
+            namespace === null
+                ? queryBuilder.is("namespace", namespace)
+                : queryBuilder.eq("namespace", namespace);
+        const { data: row, error } = await queryBuilder.select().maybeSingle();
+        if (error) {
+            throw error;
+        }
+        if (row) {
+            return true;
+        }
+        console.debug(
+            "In DeleteVar: no row with name=" +
+                name +
+                " namespace=" +
+                namespace +
+                " found in supabase table " +
+                this.varsTableName +
+                "."
+        );
+        return false;
+    }
+}
+
+//const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
+//const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
+const DEFAULT_VALUE_STORE = new ValStore(
+    new MultiJsonStore([
+        new InMemoryJsonStore(),
+        new SupabaseJsonStore(supabase),
+    ])
+);
 
 export class Val {
     __jsosValStore: ValStore;
@@ -1730,7 +1853,8 @@ export interface Var {
     //__jsosPull(): void;
 }
 
-export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
+//export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
+export const DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
 
 export class Var {
     /*
@@ -1918,7 +2042,7 @@ export async function NewVar<T>(options: {
         console.log("turned non-Val into Val");
     }
     let obj: any = await forSureAVal.__jsosObjectCopy(false);
-    const newVarRes = varStore.newVar(
+    const newVarRes = await varStore.newVar(
         name,
         namespace,
         forSureAVal.__jsosSha256
@@ -1973,34 +2097,6 @@ export async function GetVar(options: {
     ) as any;
 }
 
-export async function GetVarFromVal(options: {
-    name: string;
-    namespace?: string;
-    val: Val;
-    varStore?: VarStore;
-    autoPullUpdates?: boolean;
-    callback?: VarUpdateCallback;
-}): Promise<any> {
-    const {
-        name,
-        namespace = null,
-        val,
-        varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true,
-        callback,
-    } = options;
-    const mutableObjCopy = await val.__jsosObjectCopy(false);
-    return new Var(
-        name,
-        namespace,
-        val,
-        mutableObjCopy,
-        varStore,
-        autoPullUpdates,
-        callback
-    ) as any;
-}
-
 export async function GetOrNewVar(options: {
     name: string;
     namespace?: string;
@@ -2039,6 +2135,19 @@ export async function GetOrNewVar(options: {
         autoPullUpdates,
         callback,
     });
+}
+
+export async function DeleteVar(options: {
+    name: string;
+    namespace?: string;
+    varStore?: VarStore;
+}): Promise<boolean> {
+    const {
+        name,
+        namespace = null,
+        varStore = DEFAULT_VARIABLE_STORE,
+    } = options;
+    return await varStore.deleteVar(name, namespace);
 }
 
 //        /* If this var exists already, fetch & return it. Else create it and
