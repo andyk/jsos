@@ -1,5 +1,5 @@
 import React, { useEffect } from "react";
-import { Var, Val, GetOrNewVar } from "./jsos";
+import { Val, GetOrNewVar } from "./jsos";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
@@ -24,18 +24,19 @@ export default function JsosContextProvider({
     function varChanged(
         name: string,
         namespace: string | null,
-        newSha256: string | null,
-        oldSha256: string
+        newSha1: string | null,
+        oldSha1: string
     ) {
-        console.log("varChanged triggered: ", oldSha256, newSha256);
+        console.log("varChanged triggered: ", oldSha1, newSha1);
         setAppData({ pObject: jsosVar?.__jsosVal || null });
     }
+
     useEffect(() => {
         (async () => {
             let fetchedVar = await GetOrNewVar({
                 name: "appData",
                 namespace: "benw-trivia",
-                defaultVal: null,
+                defaultVal: { games: {}},
                 callback: varChanged,
             });
             setJsosVar(fetchedVar);
@@ -53,9 +54,11 @@ export default function JsosContextProvider({
     }, [jsosVar]);
 
     async function updatePObject(updateFun: (oldObj: any) => any) {
+        console.log("in updatePObject, jsosVar is:", jsosVar);
         if (jsosVar !== null) {
-            jsosVar.__jsosUpdate(updateFun)
+            await jsosVar.__jsosUpdate(updateFun)
             setAppData({ pObject: jsosVar?.__jsosVal || null });
+            console.log("successfully setAppData in updatePObject()");
         }
     }
 

@@ -1,6 +1,15 @@
-import jsos, { getSha1, Val, FileBackedMemoryStore} from './jsos';
-import JsosContextProvider, { DataContext } from './JsosContext';
-import useData from './useData';
+import { Val, Var, NewVal, GetVar, NewVar, GetOrNewVar } from "./jsos";
+import JsosContextProvider, { DataContext } from "./JsosContext";
+import useData from "./useData";
 
-export { JsosContextProvider, DataContext, useData, getSha1, Val as PersistentObject, FileBackedMemoryStore as Cache };
-export default jsos;
+export {
+    JsosContextProvider,
+    DataContext,
+    useData,
+    Val,
+    Var,
+    NewVal,
+    GetVar,
+    NewVar,
+    GetOrNewVar,
+};

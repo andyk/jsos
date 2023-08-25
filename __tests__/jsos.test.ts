@@ -5,14 +5,11 @@ import {
     InMemoryJsonStore,
     InMemoryVarStore,
     VarUpdateCallback,
-    Val,
     NewVal,
-    ValFromSha256,
     NewVar,
     GetVar,
+    GetOrNewVar,
     DeleteVar,
-    Var,
-    DEFAULT_VARIABLE_STORE,
 } from "../src/jsos";
 import {
     OrderedMap,
@@ -55,8 +52,8 @@ test("Test valuestore with immutable types", async () => {
     //const om = OrderedMap(([[ "a", {inner: ImmutableSet([1, {innerinner: "inin"}])}], ["b", "bb"], undefined]) as any);
     const os = new InMemoryJsonStore();
     const vs = new ValStore(os);
-    const [putSha256, _] = await vs.putVal(om);
-    const gotVal = await vs.getVal(putSha256);
+    const [putSha1, _] = await vs.putVal(om);
+    const gotVal = await vs.getVal(putSha1);
     expect(om).toEqual(gotVal);
 });
 
@@ -69,37 +66,37 @@ test("encodeNormalized and decodeNormalized.", async () => {
 
 test("VarStore basics", async () => {
     const varStore = new InMemoryVarStore();
-    expect(await varStore.newVar("name", "namespace", "exampleSha256")).toBe(
+    expect(await varStore.newVar("name", "namespace", "exampleSha1")).toBe(
         true
     );
-    expect(await varStore.newVar("name", "namespace", "exampleSha256")).toBe(
+    expect(await varStore.newVar("name", "namespace", "exampleSha1")).toBe(
         false
     );
-    expect(await varStore.getVar("name", "namespace")).toBe("exampleSha256");
+    expect(await varStore.getVar("name", "namespace")).toBe("exampleSha1");
     expect(
         await varStore.updateVar(
             "name",
             "namespace",
-            "exampleSha256",
-            "newSha256"
+            "exampleSha1",
+            "newSha1"
         )
     ).toBe(true);
-    expect(await varStore.getVar("name", "namespace")).toBe("newSha256");
+    expect(await varStore.getVar("name", "namespace")).toBe("newSha1");
     expect(
         await varStore.updateVar(
             "name",
             "namespace",
-            "wrongCurrentSha256",
-            "newSha256"
+            "wrongCurrentSha1",
+            "newSha1"
         )
     ).toBe(false);
-    expect(await varStore.getVar("name", "namespace")).toBe("newSha256");
+    expect(await varStore.getVar("name", "namespace")).toBe("newSha1");
     const callBack: VarUpdateCallback = jest.fn(
-        (n, ns, oldSha256, newSha256) => {
+        (n, ns, oldSha1, newSha1) => {
             expect(n).toBe("name");
             expect(ns).toBe("namespace");
-            expect(oldSha256).toBe("newSha256");
-            expect(newSha256).toBe("newerSha256");
+            expect(oldSha1).toBe("newSha1");
+            expect(newSha1).toBe("newerSha1");
         }
     );
     const subscrID = varStore.subscribeToUpdates("name", "namespace", callBack);
@@ -108,8 +105,8 @@ test("VarStore basics", async () => {
         await varStore.updateVar(
             "name",
             "namespace",
-            "newSha256",
-            "newerSha256"
+            "newSha1",
+            "newerSha1"
         )
     ).toBe(true);
     expect(callBack).toBeCalledTimes(1);
@@ -118,27 +115,30 @@ test("VarStore basics", async () => {
         await varStore.updateVar(
             "name",
             "namespace",
-            "newerSha256",
-            "evenNewerSha256"
+            "newerSha1",
+            "evenNewerSha1"
         )
     ).toBe(true);
     expect(callBack).toBeCalledTimes(1);
 });
 
 test("Val basics", async () => {
+    const v0 = await NewVal({ object: null });
+    expect(v0).toBeDefined();
+    expect(v0.__jsosValObject).toBe(null);
     const init = [1, 2, 3];
-    const v = await NewVal({ object: init });
-    expect(v.__jsosValObject).toEqual(init);
-    expect(v[0]).toBe(1);
-    expect(v[2]).toBe(3);
-    expect(v.length).toBe(3);
-    expect(v[3]).toBe(undefined);
-    const updated = await v.__jsosUpdate((oldVal: Array<number>) => [
+    const v1 = await NewVal({ object: init });
+    expect(v1.__jsosValObject).toEqual(init);
+    expect(v1[0]).toBe(1);
+    expect(v1[2]).toBe(3);
+    expect(v1.length).toBe(3);
+    expect(v1[3]).toBe(undefined);
+    const updated = await v1.__jsosUpdate((oldVal: Array<number>) => [
         ...oldVal,
         4,
     ]);
     expect(updated.__jsosValObject).toEqual([1, 2, 3, 4]);
-    expect(v.__jsosSha256).not.toBe(updated.__jsosSha256);
+    expect(v1.__jsosSha1).not.toBe(updated.__jsosSha1);
 
     const strVal: any = await NewVal({ object: "a string" });
     const newStr = await strVal.__jsosUpdate(
@@ -151,35 +151,54 @@ test("Val basics", async () => {
         (oldVal: boolean) => oldVal && false
     );
     expect(newBool.__jsosValObject).toBe(false);
-});
+}, 7000);
 
 describe('Creates supabase state', () => {
     beforeAll(async () => {
+      await DeleteVar({ name: "myNullTestVar" });
       await DeleteVar({ name: "myTestVar" });
+      await DeleteVar({ name: "myTestVar2" });
     });
 
     test("Var basics", async () => {
-        const init = [1, 2, 3];
-        const v = await NewVar({ name: "myTestVar", val: init });
+        const v0 = await NewVar({ name: "myNullTestVar", val: null})
+        expect(v0.__jsosVarObj).toBe(null);
+        expect(v0).toBeDefined();
+        const v1 = await NewVar({ name: "myTestVar", val: [1, 2, 3] });
         //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
         const v2 = await GetVar({ name: "myTestVar" });
         expect(v2).toBeDefined();
-        expect(v.__jsosEquals(v2)).toBe(true);
-        const v3 = await NewVar({ // test to be sure creating Var from existing Val works.
-            name: "name2",
+        expect(v1.__jsosEquals(v2)).toBe(true);
+        expect(NewVar({ // test to be sure creating Var from existing Val works.
+            name: "myTestVar",
             val: await NewVal({ object: [1, 2, 3] }),
+        })).rejects.toThrow();
+        const v3 = await NewVar({
+            name: "myTestVar2",
+            val: await NewVal({ object: [1, 2, 3] })
         });
         expect(v3).toBeDefined();
-        expect(v3.__jsosSha256).toEqual(v.__jsosSha256);
-        expect(v[0]).toBe(1);
-        v[3] = 4;
-        expect(v[3]).toBe(4);
-        expect(v.length).toBe(4);
+        expect(v3.__jsosSha1).toEqual(v1.__jsosSha1);
+        await v3.__jsosUpdate((oldVar: Array<number>) => [
+            ...oldVar,
+            4,
+        ]);
+        expect(v3.length).toBe(4);
+        // Test transparent syncing of mutating operations on Var.
+        expect(v1[0]).toBe(1);
+        v1[3] = 4;
+        expect(v1[3]).toBe(4);
+        expect(v1.length).toBe(4);
         function sleep(ms: number) {
             return new Promise((resolve) => setTimeout(resolve, ms));
         }
         await sleep(7500); // With supabase, 500ms wasn't enough time.
         expect(v2.length).toBe(4);
+        const v4 = await GetOrNewVar({
+            name: "appData",
+            namespace: "benw-trivia",
+            defaultVal: null
+        });
     }, 10000000);
 });
 
