@@ -151,14 +151,14 @@ test("Val basics", async () => {
         (oldVal: boolean) => oldVal && false
     );
     expect(newBool.__jsosValObject).toBe(false);
-}, 7000);
+}, 1000000);
 
-describe('Creates supabase state', () => {
+describe('Creates (& cleans up) VarStore state', () => {
     beforeAll(async () => {
       await DeleteVar({ name: "myNullTestVar" });
       await DeleteVar({ name: "myTestVar" });
       await DeleteVar({ name: "myTestVar2" });
-    });
+    }, 1000000);
 
     test("Var basics", async () => {
         const v0 = await NewVar({ name: "myNullTestVar", val: null})

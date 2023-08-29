@@ -1,4 +1,5 @@
 node_modules
 
-JsosVariableStore.json
-JsosObjectStore.json
+JsosVarStore.json
+JsosJsonStore.json
+var_subscriptions

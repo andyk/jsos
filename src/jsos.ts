@@ -16,6 +16,7 @@ import {
 } from "immutable";
 import { v4 as uuidv4 } from "uuid";
 import * as fs from "fs";
+import path from "path";
 import hash from "object-hash";
 import supabase from "./supabase";
 import { Mutex } from "async-mutex";
@@ -97,15 +98,18 @@ export type VarUpdateCallback = (
 ) => void;
 type SyncValUpdateFn = (old: any) => any;
 type AsyncValUpdateFn = (old: any) => Promise<any>;
+type VarKey = string;
+type SubscriptionUUID = string;
 
 const LOCKFILE_OPTIONS = { retries: 10 };
 const OBJECT_STORE_NAME = "JsosJsonStore";
 const OBJECT_STORE_FILE_PATH = `./${OBJECT_STORE_NAME}.json`;
 const VARIABLE_STORE_PATH = "JsosVarStore";
 const VARIABLE_STORE_FILE_PATH = `./${VARIABLE_STORE_PATH}.json`;
-const VALUE_REF_PREFIX = "~#jVal:";
-const VARIABLE_STR_KEY_PREFIX = "~#jVar";
-const STR_KEY_SEP = "~#~#~";
+const SUBSCRIPTIONS_FOLDER_PATH = "./var_subscriptions";
+const VALUE_REF_PREFIX = "-#jVal:";
+const VARIABLE_STR_KEY_PREFIX = "-#jVar";
+const STR_KEY_SEP = "-#-#-";
 const DEFAULT_OBJECTS_TABLE_NAME = "jsos_objects";
 const DEFAULT_VARIABLES_TABLE_NAME = "jsos_vars";
 const DEFAULT_OBJECT_KEY_COL = "hash";
@@ -197,7 +201,7 @@ function _sha265FromValRef(ref: string): string {
     return ref.slice(VALUE_REF_PREFIX.length);
 }
 
-function _toVarKey(name: string, namespace: string | null) {
+function _toVarKey(name: string, namespace: string | null): VarKey {
     if (name.includes(STR_KEY_SEP)) {
         throw new Error(`Var name cannot contain ${STR_KEY_SEP}`);
     }
@@ -210,7 +214,10 @@ function _toVarKey(name: string, namespace: string | null) {
 }
 
 // Key of VALUE_STR_KEY_PREFIX and nothing else is
-function _fromVarKey(key: string | null) {
+function _fromVarKey(key: VarKey | null): {
+    name: string;
+    namespace: string | null;
+} {
     if (typeof key !== "string") {
         throw new Error(`Invalid var key: ${key}`);
     }
@@ -232,9 +239,7 @@ abstract class JsonStore {
     abstract getJson(sha1: string): Promise<Json | undefined>;
     // If network cost/latency is high, you probably want to override this
     // to batch multiple gets into a single network message.
-    async getJsons(
-        sha1Array: Array<string>
-    ): Promise<Array<Json | undefined>> {
+    async getJsons(sha1Array: Array<string>): Promise<Array<Json | undefined>> {
         const promises = sha1Array.map(
             async (sha1) => await this.getJson(sha1)
         );
@@ -281,13 +286,15 @@ abstract class JsonStore {
 
 class MultiJsonStore extends JsonStore {
     readonly jsonStores: Array<JsonStore>;
+    autoCache: boolean;
 
-    constructor(jsonStores: Array<JsonStore>) {
+    constructor(jsonStores: Array<JsonStore>, autoCache: boolean = true) {
         if (jsonStores.length === 0) {
             throw new Error("MultiJsonStore must have at least one JsonStore");
         }
         super();
         this.jsonStores = jsonStores;
+        this.autoCache = autoCache;
     }
 
     async hasJson(sha1: string): Promise<boolean> {
@@ -300,12 +307,27 @@ class MultiJsonStore extends JsonStore {
     }
 
     async getJson(sha1: string): Promise<Json | undefined> {
+        const missingSha1: Array<JsonStore> = [];
+        let gotVal: Json | undefined = undefined;
         for (const jsonStore of this.jsonStores) {
-            const gotVal = await jsonStore.getJson(sha1);
+            gotVal = await jsonStore.getJson(sha1);
             if (gotVal !== undefined) {
-                return gotVal;
+                break;
+            } else {
+                missingSha1.push(jsonStore);
             }
         }
+        // asynchronously put the value into the stores that
+        // were checked and missing it. This has the effect of
+        // using each store as a cache for the ones that are
+        // after it in this.jsonStores.
+        if (this.autoCache && typeof gotVal !== "undefined") {
+            const foundVal: Json = gotVal;
+            missingSha1.map((jsonStore) => {
+                jsonStore.putJson(foundVal);
+            });
+        }
+        return gotVal;
     }
 
     async putJson(object: Json): Promise<string> {
@@ -326,7 +348,7 @@ class MultiJsonStore extends JsonStore {
 
     async deleteJson(sha1: string): Promise<void> {
         const promises = this.jsonStores.map(async (jsonStore) => {
-            jsonStore.deleteJson(sha1);
+            await jsonStore.deleteJson(sha1);
         });
         return;
     }
@@ -473,10 +495,7 @@ export class ValStore {
     async getValEntries(sha1array: Array<string>): Promise<Map<string, any>> {
         const tuples = Promise.all(
             sha1array.map(async (sha1) => {
-                const tuple: [string, any] = [
-                    sha1,
-                    await this.getVal(sha1),
-                ];
+                const tuple: [string, any] = [sha1, await this.getVal(sha1)];
                 return tuple;
             })
         );
@@ -838,27 +857,28 @@ export class ValStore {
 //       deleted Var as its parent.
 // 4. undelete a (soft deleted) var (name, namespace).
 export abstract class VarStore {
-    // SetVar Returns true if the Var was successfully created or
-    // updated, false if a tuple already exists with the provided name &
-    // namespace but a different sha1 than the provided oldSha1. When trying
-    // to create a new Var, omit the oldSha1 arg. If this returns false,
-    // it is up to you to deal with conflicts, which likely will mean: get the
-    // most recent version of the var, perform any merging necessary
-    // between the changes you've applied to the underlying val and the
-    // changes present in the val that somebody else pushed alrady, and try
-    // again.
+    // returns sha1 of the var if it exists. Else returns undefined.
     abstract getVar(
         name: string,
         namespace: string | null
     ): Promise<string | undefined>;
 
-    // Return true if the Var was successfully created.
+    // returns true if the var did not exist and was created. Else returns false.
     abstract newVar(
         name: string,
         namespace: string | null,
         valSha1: string
     ): Promise<boolean>;
 
+    // Returns true if the Var was successfully updated, false if a tuple
+    // already exists with the provided name & namespace but a different sha1
+    // than the provided oldSha1. If this returns false, it is up to you to deal
+    // with conflicts, which likely will mean: get the most recent version of
+    // the var, perform any merging necessary between the changes you've applied
+    // to the underlying val and the changes present in the val that somebody
+    // else pushed already, and then try calling updateVar again.  Must
+    // (explicitly or implicitly) call notifyListeners() if the update was
+    // successful.
     abstract updateVar(
         name: string,
         namespace: string | null,
@@ -866,37 +886,42 @@ export abstract class VarStore {
         newSha1: string
     ): Promise<boolean>;
 
-    // Return true if the Var was found and deleted. False otherwise.
+    // Return true if the Var was found and deleted. False otherwise.  Must
+    // (explicitly or implicitly) call notifyListeners() if the delete was
+    // successful.
     abstract deleteVar(
         name: string,
         namespace: string | null
     ): Promise<boolean>;
 
-    varListeners: Map<string, Map<string, VarUpdateCallback>> = new Map();
-    subscriptionIdToKey: Map<string, string> = new Map();
+    // varListeners is a map of varKey (i.e. name, namespace) -> Map<subscriptionUUID, callbackFn>
+    varListeners: Map<VarKey, Map<SubscriptionUUID, VarUpdateCallback>> =
+        new Map();
+    subscriptionIdToVarKey: Map<SubscriptionUUID, VarKey> = new Map();
 
+    // Returns a subscription UUID that can be used to unsubscribe from updates.
     subscribeToUpdates(
         name: string,
         namespace: string | null,
         callbackFn: VarUpdateCallback
-    ): string {
+    ): SubscriptionUUID {
         const uuid = uuidv4();
-        const key = _toVarKey(name, namespace);
-        if (!this.varListeners.has(key)) {
-            this.varListeners.set(key, new Map());
+        const varKey = _toVarKey(name, namespace);
+        if (!this.varListeners.has(varKey)) {
+            this.varListeners.set(varKey, new Map());
         }
-        this.varListeners.get(key)!.set(uuid, callbackFn);
-        this.subscriptionIdToKey.set(uuid, key);
+        this.varListeners.get(varKey)!.set(uuid, callbackFn);
+        this.subscriptionIdToVarKey.set(uuid, varKey);
         return uuid;
     }
 
-    unsubscribeFromUpdates(subscriptionUUID: string): boolean {
-        const key = this.subscriptionIdToKey.get(subscriptionUUID);
+    unsubscribeFromUpdates(subscriptionUUID: SubscriptionUUID): boolean {
+        const key = this.subscriptionIdToVarKey.get(subscriptionUUID);
         if (!key) {
             return false;
         }
         this.varListeners.get(key)!.delete(subscriptionUUID);
-        this.subscriptionIdToKey.delete(subscriptionUUID);
+        this.subscriptionIdToVarKey.delete(subscriptionUUID);
         return true;
     }
 
@@ -1202,11 +1227,10 @@ export class BrowserLocalStorageVarStore extends VarStore {
     }
 }
 
-// An in-memory object store backed by a local file (not available in browser)
+// A simple filesystem based JSON store (not available in browser).
 export class FileBackedJsonStore extends JsonStore {
-    private cache: { [key: string]: any } = {};
+    lockfile = require("proper-lockfile");
     private jsonStoreFileName: string;
-    private indexDBStore: ReturnType<typeof createStore> | null;
 
     constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
         if (typeof window !== "undefined") {
@@ -1214,66 +1238,153 @@ export class FileBackedJsonStore extends JsonStore {
         }
         super();
         this.jsonStoreFileName = fileName;
-        this.indexDBStore = null;
-        this.load();
-    }
-
-    private async load() {
-        const fs = require("fs");
-        if (fs.existsSync(this.jsonStoreFileName)) {
-            const cacheData = fs.readFileSync(this.jsonStoreFileName, "utf8");
-            const result = JSON.parse(cacheData);
-            Object.assign(this.cache, result);
+        if (!fs.existsSync(this.jsonStoreFileName)) {
+            fs.writeFileSync(this.jsonStoreFileName, "{}", { flag: "wx" });
         }
     }
 
-    async hasJson(sha1: string): Promise<boolean> {
-        return sha1 in this.cache;
+    #readJsonStoreFile(): { [key: string]: any } {
+        const file = fs.readFileSync(this.jsonStoreFileName, "utf8");
+        return JSON.parse(file);
     }
 
-    async getJson(sha1: string): Promise<Json> {
-        return this.cache[sha1];
-    }
-
-    async putJson(object: Json): Promise<string> {
-        /* Write to memory & asynchronously persist to IndexDB or FS. */
-        const key = getSha1(object);
-        this.cache[key] = object;
-        await this._flushToFile();
-        return key;
-    }
-
-    async deleteJson(sha1: string): Promise<void> {
-        await del(sha1, this.indexDBStore);
-        delete this.cache[sha1];
-    }
-
-    private async _flushToFile(): Promise<void> {
-        const fs = require("fs");
+    #writeJsonStoreFile(obj: Json): void {
         try {
-            await fs.writeFile(
-                this.jsonStoreFileName,
-                JSON.stringify(this.cache)
-            );
+            fs.writeFileSync(this.jsonStoreFileName, JSON.stringify(obj));
         } catch (err) {
             console.error("Error writing to file: ", err);
         }
     }
+
+    async hasJson(sha1: string): Promise<boolean> {
+        return sha1 in this.#readJsonStoreFile();
+    }
+
+    async getJson(sha1: string): Promise<Json> {
+        return this.#readJsonStoreFile()[sha1];
+    }
+
+    async putJson(object: Json): Promise<string> {
+        /* Write to memory & asynchronously persist to IndexDB or FS. */
+        //const release = await this.lockfile.lock(
+        //    this.jsonStoreFileName,
+        //    LOCKFILE_OPTIONS
+        //);
+        const key = getSha1(object);
+        const jsonStore = this.#readJsonStoreFile();
+        jsonStore[key] = object;
+        this.#writeJsonStoreFile(jsonStore);
+        //release();
+        return key;
+    }
+
+    async deleteJson(sha1: string): Promise<void> {
+        //const release = await this.lockfile.lock(
+        //    this.jsonStoreFileName,
+        //    LOCKFILE_OPTIONS
+        //);
+        const jsonStore = this.#readJsonStoreFile();
+        delete jsonStore[sha1];
+        this.#writeJsonStoreFile(jsonStore);
+        //release();
+    }
 }
 
+// A simple filesystem based Var store (not available in browser).
+// Pub-Sub by listeners to variable updates is also handled via the file system
+// (i.e. listeners are notified of updates via file system events).
+// Each time a listener subscribes to updates for a given var, a file is created
+// with the name `SUBSCRIPTIONS_FOLDER/<VAR_KEY>/<SUBSCRIPTION_ID>. Each time a
+// var is updated, its corresponding <VAR_KEY> dir is touched which notifies
+// all listeners. Each time a
+// listener unsubscribes from updates
 export class FileBackedVarStore extends VarStore {
     lockfile = require("proper-lockfile");
+    chokidar = require("chokidar");
     private varStoreFileName: string;
+    private subscriptionsFolderPath: string;
+    watchers: Map<SubscriptionUUID, any>;
 
-    constructor(fileName: string = VARIABLE_STORE_FILE_PATH) {
+    constructor(
+        varStoreFilePath: string = VARIABLE_STORE_FILE_PATH,
+        subscriptionsFolderPath: string = SUBSCRIPTIONS_FOLDER_PATH
+    ) {
         if (typeof window !== "undefined") {
             throw new Error("FileBackedJsonStore is not available in browser");
         }
         super();
-        this.varStoreFileName = fileName;
+        this.varStoreFileName = varStoreFilePath;
         if (!fs.existsSync(this.varStoreFileName)) {
-            fs.writeFileSync(this.varStoreFileName, "");
+            fs.writeFileSync(this.varStoreFileName, "{}", { flag: "wx" });
         }
+        this.subscriptionsFolderPath = subscriptionsFolderPath;
+        if (!fs.existsSync(this.subscriptionsFolderPath)) {
+            fs.mkdirSync(this.subscriptionsFolderPath, { recursive: true });
+        }
+        this.watchers = new Map();
+    }
+
+    getListenerFileName(varKey: VarKey, subscriptionUuid: SubscriptionUUID) {
+        return `${this.subscriptionsFolderPath}/${varKey}/${subscriptionUuid}`;
+    }
+
+    resetListenerFile(listenerFileName: string) {
+        const dir = path.dirname(listenerFileName);
+        if (!fs.existsSync(dir)){
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const outStream = fs.createWriteStream(listenerFileName, 'utf8');
+        outStream.write('{}');
+        outStream.end();
+    }
+
+    // Set up a listener to receive notifications of changes to the var store
+    // by others.
+    subscribeToUpdates(
+        name: string,
+        namespace: string | null,
+        callbackFn: VarUpdateCallback
+    ): string {
+        const listenerUuid = super.subscribeToUpdates(
+            name,
+            namespace,
+            callbackFn
+        );
+        const listenerFileName = this.getListenerFileName(_toVarKey(name, namespace), listenerUuid);
+        if (fs.existsSync(listenerFileName)) {
+            throw Error(`Subscription file ${listenerFileName} already exists`);
+        }
+        this.resetListenerFile(listenerFileName);
+        const watcher = this.chokidar.watch(listenerFileName);
+        watcher.on("change", (path: string, stats: any) => {
+            console.log(`File ${path} changed. reading its events and calling notifyListeners for each event`);
+            const listenerFileContents = fs.readFileSync(listenerFileName, "utf8");
+            const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
+            for (let [oldSha1, newSha1] of listenerEvents) {
+                this.notifyListeners(name, namespace, oldSha1, newSha1);
+            }
+            this.resetListenerFile(listenerFileName);
+        });
+        this.watchers.set(listenerUuid, watcher);
+        return listenerUuid;
+    }
+
+    unsubscribeFromUpdates(subscriptionUUID: string): boolean {
+        const success = super.unsubscribeFromUpdates(subscriptionUUID);
+        if (!success) {
+            return false;
+        }
+        this.watchers.get(subscriptionUUID)?.close()
+        const varKey = this.subscriptionIdToVarKey.get(subscriptionUUID);
+        if (!varKey) {
+            return false;
+        }
+        const listenerFileName = this.getListenerFileName(varKey, subscriptionUUID);
+        if (!fs.existsSync(listenerFileName)) {
+            return false;
+        }
+        fs.unlinkSync(listenerFileName);
+        return true;
     }
 
     private readVarStoreFile(): { [key: string]: string } {
@@ -1290,20 +1401,29 @@ export class FileBackedVarStore extends VarStore {
             this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const varStore = this.readVarStoreFile();
-        const key = _toVarKey(name, namespace);
-        if (key in varStore) {
+        try {
+            const varStore = this.readVarStoreFile();
+            const key = _toVarKey(name, namespace);
+            if (key in varStore) {
+                console.error(
+                    `var ${name} already exists in namespace ${namespace} in ` +
+                        `file ${this.varStoreFileName}. Did you mean to use ` +
+                        `updateVar() instead?`
+                );
+                return false;
+            }
+            varStore[key] = valSha1;
+            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            return true;
+        } catch (error) {
             console.error(
-                `var ${name} already exists in namespace ${namespace} in ` +
-                    `file ${this.varStoreFileName}. Did you mean to use ` +
-                    `updateVar() instead?`
+                "An error occurred while creating a new variable:",
+                error
             );
-            return false;
+            throw error;
+        } finally {
+            release();
         }
-        varStore[key] = valSha1;
-        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-        release();
-        return true;
     }
 
     async updateVar(
@@ -1316,15 +1436,24 @@ export class FileBackedVarStore extends VarStore {
             this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const varStore = this.readVarStoreFile();
-        const key = _toVarKey(name, namespace);
-        if (key in varStore && varStore[key] !== oldSha1) {
-            return false;
+        try {
+            const varStore = this.readVarStoreFile();
+            const key = _toVarKey(name, namespace);
+            if (key in varStore && varStore[key] !== oldSha1) {
+                return false;
+            }
+            varStore[key] = newSha1;
+            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            return true;
+        } catch (error) {
+            console.error(
+                "An error occurred while creating a new variable:",
+                error
+            );
+            throw error;
+        } finally {
+            release();
         }
-        varStore[key] = newSha1;
-        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-        release();
-        return true;
     }
 
     async getVar(
@@ -1335,9 +1464,18 @@ export class FileBackedVarStore extends VarStore {
             this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const varStore = this.readVarStoreFile();
-        release();
-        return varStore[_toVarKey(name, namespace)];
+        try {
+            const varStore = this.readVarStoreFile();
+            return varStore[_toVarKey(name, namespace)];
+        } catch (error) {
+            console.error(
+                "An error occurred while creating a new variable:",
+                error
+            );
+            throw error;
+        } finally {
+            release();
+        }
     }
 
     async deleteVar(name: string, namespace: string | null): Promise<boolean> {
@@ -1345,15 +1483,24 @@ export class FileBackedVarStore extends VarStore {
             this.varStoreFileName,
             LOCKFILE_OPTIONS
         );
-        const varStore = this.readVarStoreFile();
-        const key = _toVarKey(name, namespace);
-        if (!(key in varStore)) {
-            return false;
+        try {
+            const varStore = this.readVarStoreFile();
+            const key = _toVarKey(name, namespace);
+            if (!(key in varStore)) {
+                return false;
+            }
+            delete varStore[key];
+            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            return true;
+        } catch (error) {
+            console.error(
+                "An error occurred while creating a new variable:",
+                error
+            );
+            throw error;
+        } finally {
+            release();
         }
-        delete varStore[key];
-        fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-        release();
-        return true;
     }
 }
 
@@ -1388,9 +1535,7 @@ class SupabaseJsonStore extends JsonStore {
         if (row) {
             return row.json;
         } else {
-            throw new Error(
-                `Val with sha1 '${sha1}' not found in database`
-            );
+            throw new Error(`Val with sha1 '${sha1}' not found in database`);
         }
     }
 
@@ -1586,7 +1731,7 @@ class SupabaseVarStore extends VarStore {
                 console.debug(
                     `Val with sha1 ${valSha1} already in database but could not be fetched.`
                 );
-                return false
+                return false;
             }
             throw error;
         }
@@ -1664,13 +1809,17 @@ class SupabaseVarStore extends VarStore {
 }
 
 //const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
-//const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
-const DEFAULT_VALUE_STORE = new ValStore(
-    new MultiJsonStore([
-        new InMemoryJsonStore(),
-        new SupabaseJsonStore(supabase),
-    ])
-);
+const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
+//const DEFAULT_VALUE_STORE_LIST: Array<JsonStore> = [];
+//DEFAULT_VALUE_STORE_LIST.push(new InMemoryJsonStore());
+//if (typeof window !== "undefined") {
+//    DEFAULT_VALUE_STORE_LIST.push(new BrowserIndexedDBJsonStore());
+//} else {
+//    //DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
+//}
+//export let DEFAULT_VALUE_STORE = new ValStore(
+//    new MultiJsonStore(DEFAULT_VALUE_STORE_LIST)
+//);
 
 export class Val {
     readonly __jsosValStore: ValStore;
@@ -1755,7 +1904,9 @@ export class Val {
 
 type ValWrapper<T> = T extends null ? Val : T & Val;
 //type VarWrapper<T> = T extends null ? Var : T & Var;
-type VarWrapper<T> = T extends null ? Var : (T extends (infer U) & Val ? U : T) & Var;
+type VarWrapper<T> = T extends null
+    ? Var
+    : (T extends infer U & Val ? U : T) & Var;
 
 export async function NewVal<T>(options: {
     object: T;
@@ -1764,7 +1915,7 @@ export async function NewVal<T>(options: {
     const { object, valStore = DEFAULT_VALUE_STORE } = options;
     const [sha1, __] = await valStore.putVal(object);
     const putVal = await valStore.getVal(sha1);
-    return new Val(putVal, sha1, valStore) as ValWrapper<T>
+    return new Val(putVal, sha1, valStore) as ValWrapper<T>;
 }
 
 export async function ValFromSha1(options: {
@@ -1777,7 +1928,14 @@ export async function ValFromSha1(options: {
 }
 
 //export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
-export const DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
+//export const DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
+export const DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+//export let DEFAULT_VARIABLE_STORE: VarStore;
+//if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+//    DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
+//} else {
+//    DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+//}
 
 // A shared mutable object.
 //
@@ -1930,17 +2088,29 @@ export class Var {
                 if (Reflect.has(target, prop)) {
                     console.log("intercepting ", prop);
                     return Reflect.get(target, prop, receiver);
-                } else if (target.__jsosVarObj && Reflect.has(target.__jsosVarObj, prop)) {
+                } else if (
+                    target.__jsosVarObj &&
+                    Reflect.has(target.__jsosVarObj, prop)
+                ) {
                     console.log("passing through ", prop);
                     return Reflect.get(target.__jsosVarObj, prop, receiver);
                 }
             },
             set: (target, prop, val, receiver) => {
                 if (Reflect.has(target, prop)) {
-                    console.log(`handling [[set]] operation directly on a Var ${target.__jsosName}`, prop);
+                    console.log(
+                        `handling [[set]] operation directly on a Var ${target.__jsosName}`,
+                        prop
+                    );
                     return Reflect.set(target, prop, val, receiver);
                 } else {
-                    console.log("passing through [[set]] prop", prop, "=", val, " operation to wrapped __jsosVarObj and __jsosVal");
+                    console.log(
+                        "passing through [[set]] prop",
+                        prop,
+                        "=",
+                        val,
+                        " operation to wrapped __jsosVarObj and __jsosVal"
+                    );
                     const setRes = Reflect.set(
                         target.__jsosVarObj,
                         prop,
@@ -1970,7 +2140,10 @@ export class Var {
         return await this.__jsosUpdate((_) => newVal);
     }
 
-    async __jsosSetIn(indexArray: Array<string | number>, newVal: any): Promise<void> {
+    async __jsosSetIn(
+        indexArray: Array<string | number>,
+        newVal: any
+    ): Promise<void> {
         throw Error("Not implemented");
     }
 
@@ -1978,16 +2151,15 @@ export class Var {
     async __jsosUpdate(
         updateFn: AsyncValUpdateFn | SyncValUpdateFn
     ): Promise<boolean> {
-        const oldVal = this.__jsosVal
+        const oldVal = this.__jsosVal;
         const newVal = await oldVal.__jsosUpdate(updateFn);
         if (oldVal.__jsosSha1 !== newVal.__jsosSha1) {
-            const updateVarRes =
-                await this.__jsosVarStore.updateVar(
-                    this.__jsosName,
-                    this.__jsosNamespace,
-                    oldVal.__jsosSha1,
-                    newVal.__jsosSha1
-                );
+            const updateVarRes = await this.__jsosVarStore.updateVar(
+                this.__jsosName,
+                this.__jsosNamespace,
+                oldVal.__jsosSha1,
+                newVal.__jsosSha1
+            );
             if (updateVarRes) {
                 this.__jsosVal = newVal;
             } else {
@@ -2127,7 +2299,7 @@ export async function GetOrNewVar(options: {
         autoPullUpdates = true,
         callback,
     } = options;
-    const val = await GetVar({
+    const gotVal = await GetVar({
         name,
         namespace,
         valStore,
@@ -2135,8 +2307,8 @@ export async function GetOrNewVar(options: {
         autoPullUpdates,
         callback,
     });
-    if (val !== undefined) {
-        return val;
+    if (gotVal !== undefined) {
+        return gotVal;
     }
     return await NewVar({
         name,
