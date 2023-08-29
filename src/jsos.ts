@@ -1334,7 +1334,7 @@ export class FileBackedVarStore extends VarStore {
             fs.mkdirSync(dir, { recursive: true });
         }
         const outStream = fs.createWriteStream(listenerFileName, 'utf8');
-        outStream.write('{}');
+        outStream.write('[]');
         outStream.end();
     }
 
@@ -1357,9 +1357,14 @@ export class FileBackedVarStore extends VarStore {
         this.resetListenerFile(listenerFileName);
         const watcher = this.chokidar.watch(listenerFileName);
         watcher.on("change", (path: string, stats: any) => {
-            console.log(`File ${path} changed. reading its events and calling notifyListeners for each event`);
             const listenerFileContents = fs.readFileSync(listenerFileName, "utf8");
             const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
+            if (!Array.isArray(listenerEvents)) {
+                throw Error(`Expected listener file ${listenerFileName} to contain an array of events`);
+            }
+            if (listenerEvents.length === 0) {
+                return;
+            }
             for (let [oldSha1, newSha1] of listenerEvents) {
                 this.notifyListeners(name, namespace, oldSha1, newSha1);
             }
@@ -1392,6 +1397,32 @@ export class FileBackedVarStore extends VarStore {
         return JSON.parse(file);
     }
 
+    // append [oldSha1: string, newSha1: string]> to the JSON array that is in
+    // listenerFileName
+    updateListenerFiles(oldSha1: string | null, newSha1: string, varKey: VarKey) {
+        const varListenerFolder = `${this.subscriptionsFolderPath}/${varKey}`;
+        try {
+            const files = fs.readdirSync(varListenerFolder);
+            for (let subscriptionFile of files) {
+                console.log("updating listener file", subscriptionFile);
+                const filePath = varListenerFolder + "/" + subscriptionFile
+                const listenerFileContents = fs.readFileSync(filePath, "utf8");
+                const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
+                listenerEvents.push([oldSha1, newSha1]);
+                const outStream = fs.createWriteStream(filePath, 'utf8');
+                outStream.write(JSON.stringify(listenerEvents));
+                outStream.end();
+            }
+        }
+        catch (err: any) {
+            if (err.code === 'ENOENT') {
+                console.log("No listeners for var", varKey);
+            } else {
+                throw err;
+            }
+        }
+    }
+
     async newVar(
         name: string,
         namespace: string | null,
@@ -1403,8 +1434,8 @@ export class FileBackedVarStore extends VarStore {
         );
         try {
             const varStore = this.readVarStoreFile();
-            const key = _toVarKey(name, namespace);
-            if (key in varStore) {
+            const varKey = _toVarKey(name, namespace);
+            if (varKey in varStore) {
                 console.error(
                     `var ${name} already exists in namespace ${namespace} in ` +
                         `file ${this.varStoreFileName}. Did you mean to use ` +
@@ -1412,8 +1443,9 @@ export class FileBackedVarStore extends VarStore {
                 );
                 return false;
             }
-            varStore[key] = valSha1;
+            varStore[varKey] = valSha1;
             fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            this.updateListenerFiles(null, valSha1, varKey);
             return true;
         } catch (error) {
             console.error(
@@ -1438,12 +1470,13 @@ export class FileBackedVarStore extends VarStore {
         );
         try {
             const varStore = this.readVarStoreFile();
-            const key = _toVarKey(name, namespace);
-            if (key in varStore && varStore[key] !== oldSha1) {
+            const varKey = _toVarKey(name, namespace);
+            if (varKey in varStore && varStore[varKey] !== oldSha1) {
                 return false;
             }
-            varStore[key] = newSha1;
+            varStore[varKey] = newSha1;
             fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            this.updateListenerFiles(oldSha1, newSha1, varKey);
             return true;
         } catch (error) {
             console.error(
@@ -1809,22 +1842,23 @@ class SupabaseVarStore extends VarStore {
 }
 
 //const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
-const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
-//const DEFAULT_VALUE_STORE_LIST: Array<JsonStore> = [];
-//DEFAULT_VALUE_STORE_LIST.push(new InMemoryJsonStore());
-//if (typeof window !== "undefined") {
-//    DEFAULT_VALUE_STORE_LIST.push(new BrowserIndexedDBJsonStore());
-//} else {
-//    //DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
-//}
-//export let DEFAULT_VALUE_STORE = new ValStore(
-//    new MultiJsonStore(DEFAULT_VALUE_STORE_LIST)
-//);
+//const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
+const DEFAULT_VALUE_STORE_LIST: Array<JsonStore> = [];
+DEFAULT_VALUE_STORE_LIST.push(new InMemoryJsonStore());
+if (typeof window !== "undefined") {
+    DEFAULT_VALUE_STORE_LIST.push(new BrowserIndexedDBJsonStore());
+} else {
+    DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
+}
+export let DEFAULT_VALUE_STORE = new ValStore(
+    new MultiJsonStore(DEFAULT_VALUE_STORE_LIST)
+);
 
 export class Val {
     readonly __jsosValStore: ValStore;
     readonly __jsosSha1: string;
     readonly __jsosValObject: any;
+
 
     constructor(object: any, sha1: string, valStore: ValStore) {
         // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
@@ -1929,13 +1963,13 @@ export async function ValFromSha1(options: {
 
 //export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
 //export const DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
-export const DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
-//export let DEFAULT_VARIABLE_STORE: VarStore;
-//if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
-//    DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
-//} else {
-//    DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
-//}
+//export const DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+export let DEFAULT_VARIABLE_STORE: VarStore;
+if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+    DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
+} else {
+    DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+}
 
 // A shared mutable object.
 //
