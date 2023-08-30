@@ -106,7 +106,7 @@ const OBJECT_STORE_NAME = "JsosJsonStore";
 const OBJECT_STORE_FILE_PATH = `./${OBJECT_STORE_NAME}.json`;
 const VARIABLE_STORE_PATH = "JsosVarStore";
 const VARIABLE_STORE_FILE_PATH = `./${VARIABLE_STORE_PATH}.json`;
-const SUBSCRIPTIONS_FOLDER_PATH = "./var_subscriptions";
+const SUBSCRIPTIONS_FOLDER_PATH = "./jsos_var_subscriptions";
 const VALUE_REF_PREFIX = "-#jVal:";
 const VARIABLE_STR_KEY_PREFIX = "-#jVar";
 const STR_KEY_SEP = "-#-#-";
@@ -1301,9 +1301,11 @@ export class FileBackedJsonStore extends JsonStore {
 export class FileBackedVarStore extends VarStore {
     lockfile = require("proper-lockfile");
     chokidar = require("chokidar");
+    // the "exit-hook" npm package didn't just work w/ ts-node, whereas this does.
+    exitHook = require("async-exit-hook");
     private varStoreFileName: string;
     private subscriptionsFolderPath: string;
-    watchers: Map<SubscriptionUUID, any>;
+    watchers: Map<SubscriptionUUID, { watcher: any, listenerFileName: string }>; 
 
     constructor(
         varStoreFilePath: string = VARIABLE_STORE_FILE_PATH,
@@ -1322,6 +1324,27 @@ export class FileBackedVarStore extends VarStore {
             fs.mkdirSync(this.subscriptionsFolderPath, { recursive: true });
         }
         this.watchers = new Map();
+        this.exitHook(() => {
+            try {
+                const subFiles = [...this.watchers.values()].map((watcher) => watcher.listenerFileName);
+                console.log("cleaning up (i.e. deleting) sub files:: ", subFiles);
+                subFiles.forEach((filename: string) => {
+                    fs.unlinkSync(filename);
+                    console.log("deleted", filename);
+                    // DELETE THE FOLDER THAT CONTAINED FILENAME IF IT IS NOW EMPTY
+                    const dir = path.dirname(filename);
+                    try {
+                        fs.rmdirSync(dir);
+                        console.log("deleted empty Var subscription directory ", dir);
+                    } catch (error) {
+                        // Ignore error if directory is not empty
+                    }
+                });
+            } catch {
+                // per https://github.com/Tapppi/async-exit-hook/issues/10
+                process.exit(1);
+            }
+        });
     }
 
     getListenerFileName(varKey: VarKey, subscriptionUuid: SubscriptionUUID) {
@@ -1370,7 +1393,7 @@ export class FileBackedVarStore extends VarStore {
             }
             this.resetListenerFile(listenerFileName);
         });
-        this.watchers.set(listenerUuid, watcher);
+        this.watchers.set(listenerUuid, { watcher, listenerFileName});
         return listenerUuid;
     }
 
@@ -1379,17 +1402,16 @@ export class FileBackedVarStore extends VarStore {
         if (!success) {
             return false;
         }
-        this.watchers.get(subscriptionUUID)?.close()
-        const varKey = this.subscriptionIdToVarKey.get(subscriptionUUID);
-        if (!varKey) {
-            return false;
+        const subscription = this.watchers.get(subscriptionUUID);
+        if (subscription) {
+            subscription.watcher.close();
+            if (!fs.existsSync(subscription.listenerFileName)) {
+                return false;
+            }
+            fs.unlinkSync(subscription.listenerFileName);
+            return true;
         }
-        const listenerFileName = this.getListenerFileName(varKey, subscriptionUUID);
-        if (!fs.existsSync(listenerFileName)) {
-            return false;
-        }
-        fs.unlinkSync(listenerFileName);
-        return true;
+        return false;
     }
 
     private readVarStoreFile(): { [key: string]: string } {
@@ -1404,7 +1426,6 @@ export class FileBackedVarStore extends VarStore {
         try {
             const files = fs.readdirSync(varListenerFolder);
             for (let subscriptionFile of files) {
-                console.log("updating listener file", subscriptionFile);
                 const filePath = varListenerFolder + "/" + subscriptionFile
                 const listenerFileContents = fs.readFileSync(filePath, "utf8");
                 const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
@@ -1415,9 +1436,7 @@ export class FileBackedVarStore extends VarStore {
             }
         }
         catch (err: any) {
-            if (err.code === 'ENOENT') {
-                console.log("No listeners for var", varKey);
-            } else {
+            if (err.code !== 'ENOENT') {
                 throw err;
             }
         }
@@ -2087,16 +2106,16 @@ export class Var {
                         });
                         this.__jsosVarObj =
                             await this.__jsosVal.__jsosObjectCopy(false);
-                        console.debug(
-                            `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace} ` +
-                                `updated via subscription: oldSha1=${oldSha1}, newSha1=${newSha1}`
-                        );
-                        if (oldSha1 !== this.__jsosVal.__jsosSha1) {
-                            console.debug(
-                                "NOTE: skipping lineage during update from subscription: " +
-                                    "oldSha1 !== Var's current __jsosSha1"
-                            );
-                        }
+                        //console.debug(
+                        //    `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace} ` +
+                        //        `updated via subscription: oldSha1=${oldSha1}, newSha1=${newSha1}`
+                        //);
+                        //if (oldSha1 !== this.__jsosVal.__jsosSha1) {
+                        //    console.debug(
+                        //        "NOTE: skipping lineage during update from subscription: " +
+                        //            "oldSha1 !== Var's current __jsosSha1"
+                        //    );
+                        //}
                     }
                 }
             );
@@ -2110,41 +2129,23 @@ export class Var {
                     )
                 );
             }
-            console.log(
-                `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace}) subscribed to updates.`
-            );
         }
-        // TODO? explicity list all the properties that we want to intercept
-        //       and pass everything else through.
 
         return new Proxy(this, {
             get: (target, prop, receiver) => {
                 if (Reflect.has(target, prop)) {
-                    console.log("intercepting ", prop);
                     return Reflect.get(target, prop, receiver);
                 } else if (
                     target.__jsosVarObj &&
                     Reflect.has(target.__jsosVarObj, prop)
                 ) {
-                    console.log("passing through ", prop);
                     return Reflect.get(target.__jsosVarObj, prop, receiver);
                 }
             },
             set: (target, prop, val, receiver) => {
                 if (Reflect.has(target, prop)) {
-                    console.log(
-                        `handling [[set]] operation directly on a Var ${target.__jsosName}`,
-                        prop
-                    );
                     return Reflect.set(target, prop, val, receiver);
                 } else {
-                    console.log(
-                        "passing through [[set]] prop",
-                        prop,
-                        "=",
-                        val,
-                        " operation to wrapped __jsosVarObj and __jsosVal"
-                    );
                     const setRes = Reflect.set(
                         target.__jsosVarObj,
                         prop,
@@ -2166,7 +2167,7 @@ export class Var {
         });
     }
 
-    __jsosSha1(): string {
+    get __jsosSha1(): string {
         return this.__jsosVal.__jsosSha1;
     }
 
@@ -2253,11 +2254,9 @@ export async function NewVar<T>(options: {
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
-        console.log("already a Val");
         forSureAVal = val;
     } else {
         forSureAVal = await NewVal({ object: val, valStore });
-        console.log("turned non-Val into Val");
     }
     let obj: any = await forSureAVal.__jsosObjectCopy(false);
     const newVarRes = await varStore.newVar(
@@ -2367,268 +2366,3 @@ export async function DeleteVar(options: {
     } = options;
     return await varStore.deleteVar(name, namespace);
 }
-
-//        /* If this var exists already, fetch & return it. Else create it and
-//         * initialize it to wrap Val(null) */
-//        const sha1 = await jsosClient.getSha1FromVar(name, namespace);
-//        const parentSha1 =
-//            (await jsosClient.getSha1FromVar(
-//                sha1,
-//                VARIABLE_PARENT_KEY
-//            )) || null;
-//        let newVar;
-//        if (sha1) {
-//            newVar = new Var(
-//                jsosClient,
-//                name,
-//                sha1,
-//                parentSha1,
-//                namespace,
-//                updateCallback
-//            );
-//        } else {
-//            const nullSha1 = await getSha1(await jsosClient.putVal(null));
-//            await jsosClient.putReference(name, namespace, nullSha1);
-//            newVar = new Var(
-//                jsosClient,
-//                name,
-//                nullSha1,
-//                null,
-//                namespace,
-//                updateCallback
-//            );
-//        }
-//        if (subscribeToSupabase) {
-//            await newVar.subscribeToSupabase();
-//        }
-//        return newVar;
-//    };
-//
-//    unsubscribeFromSupabase = async (): Promise<void> => {
-//        if (this.subscribed()) {
-//            const res = await this.jsosClient.supabaseClient.removeChannel(
-//                this.__jsosSupabaseSubcription
-//            );
-//            if (res === "error" || res === "timed out") {
-//                console.error(
-//                    "Error unsubscribing from supabase updates: ",
-//                    res
-//                );
-//            }
-//            this.__jsosSupabaseSubcription = null;
-//        }
-//    };
-//
-//    get = async (): Promise<Val> => {
-//        const obj = await this.jsosClient.getVal(this.objectSha1);
-//        if (!obj) {
-//            throw Error(
-//                `Object with sha1 '${this.objectSha1}' not found in database`
-//            );
-//        }
-//        return obj;
-//    };
-//
-//    getParent = async (): Promise<Val> => {
-//        const obj = await this.jsosClient.getVal(this.parentSha1);
-//        if (!obj) {
-//            throw Error(
-//                `Parent object with sha1 '${this.parentSha1}' not found in database`
-//            );
-//        }
-//        return obj;
-//    };
-//
-//    set = async (newVal: JVal | Val): Promise<Val> => {
-//        /* TODO: We might need to use a lock to handle race conditions between
-//         * this function and updates done by the supbase subscription callback. */
-//        if (!isVal(newVal)) {
-//            newVal = await this.jsosClient.val(newVal);
-//        }
-//        let queryBuilder = this.jsosClient.supabaseClient
-//            .from(this.jsosClient.varsTableName)
-//            .update({ object: newVal.sha1 })
-//            .eq("name", this.name)
-//            .eq("object", this.objectSha1);
-//        // use "is" to test against null and "eq" for non-null.
-//        queryBuilder =
-//            this.namespace === null
-//                ? queryBuilder.is("namespace", this.namespace)
-//                : queryBuilder.eq("namespace", this.namespace);
-//        const { data: row, error } = await queryBuilder.select().maybeSingle();
-//        if (error) {
-//            throw error;
-//        }
-//        if (!row) {
-//            const { data: innerRow, error } =
-//                await this.jsosClient.supabaseClient
-//                    .from(this.jsosClient.varsTableName)
-//                    .update({ object: newVal.sha1 })
-//                    .eq("name", this.name)
-//                    .eq("namespace", this.namespace)
-//                    .select()
-//                    .maybeSingle();
-//            if (error) {
-//                throw error;
-//            }
-//            if (innerRow) {
-//                throw new Error(
-//                    `Object with sha1 '${this.objectSha1}' not found in database. ` +
-//                        "This var was probably updated by somebody asynchronously " +
-//                        "and the update did not make it back to this copy of the var. " +
-//                        "Is this var subscribed() to supabase updates? If not you " +
-//                        "should subscribe() to supabase updates to avoid this error."
-//                );
-//            } else {
-//                throw new Error(
-//                    `No ref found in supabase with name ${this.name} ` +
-//                        `and namespace ${this.namespace}. The associated with this var ` +
-//                        `may have been deleted from supabase since you created this var.`
-//                );
-//            }
-//        } else {
-//            this.objectSha1 = newVal.sha1;
-//            return newVal;
-//        }
-//    };
-//
-//    update = async (updateFn: (currVal: JVal) => JVal) => {
-//        /* Updates the entry in supbase for this var to point to the new value
-//        using a postgres transaction to ensure that the object we think is current
-//        is the same as what the database thinks is the current object pointed
-//        to by this var. If the object has changed, we throw an error and
-//        the caller can try again.
-//        */
-//        const currVal = await this.get();
-//        const parentSha1 = this.objectSha1; // capture this before we change it.
-//        const newVal = await currVal.update(updateFn);
-//        const childSha1 = getSha1(newVal);
-//        const afterSetting = await this.set(newVal);
-//        await this.jsosClient.putReference(
-//            childSha1,
-//            VARIABLE_PARENT_KEY,
-//            parentSha1
-//        );
-//        this.parentSha1 = parentSha1;
-//        return afterSetting;
-//    };
-//}
-
-//export interface PersistentOrderedMap<K, V> {
-//    update(key: K, notSetVal: V, updater: (val: V) => V): this;
-//    update(key: K, updater: (val: V | undefined) => V | undefined): this;
-//    update<R>(updater: (val: this) => R): R;
-//    set(key: K, val: V): this;
-//    toObject(): { [key: string]: V };
-//    equals(other: unknown): boolean;
-//    get<NSV>(key: K, notSetVal: NSV): V | NSV;
-//    get(key: K): V | undefined;
-//}
-//
-//export class PersistentOrderedMap<K, V> implements PersistentOrderedMap<K, V> {
-//    jsosClient: JsosClient;
-//    orderedMap: OrderedMap<K, V>;
-//    sha1: string;
-//    wrappedFunctions = ["set", "setIn"];
-//
-//    private constructor(
-//        jsosClient: JsosClient,
-//        orderedMap: OrderedMap<K, V>,
-//        sha1: string
-//    ) {
-//        this.jsosClient = jsosClient;
-//        this.orderedMap = OrderedMap(orderedMap);
-//        this.sha1 = sha1;
-//
-//        return new Proxy(this, {
-//            get: (target, prop, receiver) => {
-//                if (Reflect.has(target, prop)) {
-//                    return Reflect.get(target, prop, receiver);
-//                } else if (target.wrappedFunctions.includes(prop.toString())) {
-//                    return function (...args) {
-//                        const method = Reflect.get(
-//                            target.orderedMap,
-//                            prop,
-//                            receiver
-//                        ).bind(target.orderedMap);
-//                        const newMap = PersistentOrderedMap.create<K, V>(
-//                            target.jsosClient,
-//                            method(...args)
-//                        );
-//                        return newMap;
-//                    };
-//                } else {
-//                    return Reflect.get(target.orderedMap, prop, receiver);
-//                }
-//            },
-//        });
-//    }
-//
-//    static create = async <K, V>(
-//        jsosClient: JsosClient,
-//        ...args
-//    ): Promise<PersistentOrderedMap<K, V>> => {
-//        const map = OrderedMap<K, V>(...args);
-//        const sha1 = getSha1(await jsosClient.putVal(map));
-//        return new PersistentOrderedMap(jsosClient, map, sha1);
-//    };
-//}
-//
-//export class OldPersistentOrderedMap<K, V> {
-//    /*
-//    A persistant ordered map that uses Jsos to stores its data in a supabase table.
-//    Each value is stored into Jsos as a separate object, and the map stores the
-//    sha1 of each value. The map itself is stored as an Array<Array> in Jsos, e.g:
-//      [["key1", "~#jVal:acf928ad927..."],["key2", "~#jVal:28cf9ad297a..."], ...]
-//    */
-//    jsosClient: JsosClient;
-//    map: OrderedMap<K, V>;
-//    sha1: string;
-//
-//    private constructor(
-//        jsosClient: JsosClient,
-//        orderedMap: OrderedMap<K, V>,
-//        sha1: string
-//    ) {
-//        this.jsosClient = jsosClient;
-//        this.map = OrderedMap(orderedMap);
-//        this.sha1 = sha1;
-//    }
-//
-//    static create = async <K, V>(
-//        jsosClient: JsosClient,
-//        ...args
-//    ): Promise<OldPersistentOrderedMap<K, V>> => {
-//        const map = OrderedMap<K, V>(...args);
-//        const sha1 = getSha1(await jsosClient.putVal(map.toArray()));
-//        return new OldPersistentOrderedMap(jsosClient, map, sha1);
-//    };
-//
-//    async set(key: K, val: V): Promise<OldPersistentOrderedMap<K, V>> {
-//        const newMap = OldPersistentOrderedMap.create<K, V>(
-//            this.jsosClient,
-//            this.map.set(key, val)
-//        );
-//        return newMap;
-//    }
-//
-//    async setIn(
-//        keyPath: Iterable<K>,
-//        val: V
-//    ): Promise<OldPersistentOrderedMap<K, V>> {
-//        const newMap = OldPersistentOrderedMap.create<K, V>(
-//            this.jsosClient,
-//            this.map.setIn(keyPath, val)
-//        );
-//        return newMap;
-//    }
-//
-//    async get(key: K): Promise<V | undefined> {
-//        return this.map.get(key);
-//    }
-//
-//    async equals(other: OldPersistentOrderedMap<K, V>): Promise<boolean> {
-//        // this could alternatively be: this.map.equals(other.map)
-//        return this.sha1 === other.sha1;
-//    }
-//}

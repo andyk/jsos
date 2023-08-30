@@ -7,6 +7,7 @@
     "@supabase/supabase-js": "^2.31.0",
     "@types/proper-lockfile": "^4.1.2",
     "@types/uuid": "^9.0.2",
+    "async-exit-hook": "^2.0.1",
     "async-mutex": "^0.4.0",
     "chokidar": "^3.5.3",
     "idb-keyval": "^6.2.1",
