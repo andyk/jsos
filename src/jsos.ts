@@ -77,29 +77,9 @@ for updating & syncing that tuple with the database. As the Var is updated,
 the reference is updated in the database.
 */
 
-type Primitive = string | number | boolean | null;
-type NormalizedJson =
-    | string
-    | number
-    | boolean
-    | null
-    | { [key: string]: Primitive }
-    | Primitive[];
-type Json = Primitive | { [key: string]: Json } | Json[];
-type EncodedNormalized = [
-    string,
-    { objectSha1: string; manifest: Array<string> }
-];
-export type VarUpdateCallback = (
-    name: string,
-    namespace: string | null,
-    oldSha1: string | null,
-    newSha1: string
-) => void;
-type SyncValUpdateFn = (old: any) => any;
-type AsyncValUpdateFn = (old: any) => Promise<any>;
-type VarKey = string;
-type SubscriptionUUID = string;
+// TODO: support functions, possibly via https://github.com/yahoo/serialize-javascript
+// https://stackoverflow.com/questions/11697863/what-is-the-correct-way-to-serialize-functions-in-javascript-for-later-use
+// This one doesn't support functions but uses Lodash's cloneDeepWith() https://github.com/wix-incubator/javascript-serializer
 
 const LOCKFILE_OPTIONS = { retries: 10 };
 const OBJECT_STORE_NAME = "JsosJsonStore";
@@ -132,6 +112,25 @@ const BUILTIN_MAP_KEY = "~#bM";
 const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
+
+type Primitive = string | number | boolean | null;
+type ValRef = `${typeof VALUE_REF_PREFIX}${string}`;
+type NormalizedJson = Primitive | { [key: string]: ValRef } | ValRef[];
+type Json = Primitive | { [key: string]: Json } | Json[];
+type EncodedNormalized = [
+    string,
+    { objectSha1: string; manifest: Array<string> }
+];
+export type VarUpdateCallback = (
+    name: string,
+    namespace: string | null,
+    oldSha1: string | null,
+    newSha1: string
+) => void;
+type SyncValUpdateFn = (old: any) => any;
+type AsyncValUpdateFn = (old: any) => Promise<any>;
+type VarKey = string;
+type SubscriptionUUID = string;
 
 function isNotEmptyObject(obj: any): obj is Record<string, any> {
     return Object.keys(obj).length !== 0;
@@ -722,7 +721,9 @@ export class ValStore {
         objAccumulator: Array<NormalizedJson>
     ): NormalizedJson {
         let normalizedJson: NormalizedJson;
-        if (object && typeof object === "object") {
+        if (isPrimitive(object)) {
+            normalizedJson = object;
+        } else {
             if (Array.isArray(object)) {
                 normalizedJson = [];
             } else {
@@ -737,8 +738,6 @@ export class ValStore {
                 //    (normalizedJson as any)[k] = (object as any)[k];
                 //}
             }
-        } else {
-            normalizedJson = object;
         }
         objAccumulator.push(normalizedJson);
         return normalizedJson;
@@ -1305,7 +1304,7 @@ export class FileBackedVarStore extends VarStore {
     exitHook = require("async-exit-hook");
     private varStoreFileName: string;
     private subscriptionsFolderPath: string;
-    watchers: Map<SubscriptionUUID, { watcher: any, listenerFileName: string }>; 
+    watchers: Map<SubscriptionUUID, { watcher: any; listenerFileName: string }>;
 
     constructor(
         varStoreFilePath: string = VARIABLE_STORE_FILE_PATH,
@@ -1326,8 +1325,13 @@ export class FileBackedVarStore extends VarStore {
         this.watchers = new Map();
         this.exitHook(() => {
             try {
-                const subFiles = [...this.watchers.values()].map((watcher) => watcher.listenerFileName);
-                console.log("cleaning up (i.e. deleting) sub files:: ", subFiles);
+                const subFiles = [...this.watchers.values()].map(
+                    (watcher) => watcher.listenerFileName
+                );
+                console.log(
+                    "cleaning up (i.e. deleting) sub files:: ",
+                    subFiles
+                );
                 subFiles.forEach((filename: string) => {
                     fs.unlinkSync(filename);
                     console.log("deleted", filename);
@@ -1335,7 +1339,10 @@ export class FileBackedVarStore extends VarStore {
                     const dir = path.dirname(filename);
                     try {
                         fs.rmdirSync(dir);
-                        console.log("deleted empty Var subscription directory ", dir);
+                        console.log(
+                            "deleted empty Var subscription directory ",
+                            dir
+                        );
                     } catch (error) {
                         // Ignore error if directory is not empty
                     }
@@ -1353,11 +1360,11 @@ export class FileBackedVarStore extends VarStore {
 
     resetListenerFile(listenerFileName: string) {
         const dir = path.dirname(listenerFileName);
-        if (!fs.existsSync(dir)){
+        if (!fs.existsSync(dir)) {
             fs.mkdirSync(dir, { recursive: true });
         }
-        const outStream = fs.createWriteStream(listenerFileName, 'utf8');
-        outStream.write('[]');
+        const outStream = fs.createWriteStream(listenerFileName, "utf8");
+        outStream.write("[]");
         outStream.end();
     }
 
@@ -1373,17 +1380,25 @@ export class FileBackedVarStore extends VarStore {
             namespace,
             callbackFn
         );
-        const listenerFileName = this.getListenerFileName(_toVarKey(name, namespace), listenerUuid);
+        const listenerFileName = this.getListenerFileName(
+            _toVarKey(name, namespace),
+            listenerUuid
+        );
         if (fs.existsSync(listenerFileName)) {
             throw Error(`Subscription file ${listenerFileName} already exists`);
         }
         this.resetListenerFile(listenerFileName);
         const watcher = this.chokidar.watch(listenerFileName);
         watcher.on("change", (path: string, stats: any) => {
-            const listenerFileContents = fs.readFileSync(listenerFileName, "utf8");
+            const listenerFileContents = fs.readFileSync(
+                listenerFileName,
+                "utf8"
+            );
             const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
             if (!Array.isArray(listenerEvents)) {
-                throw Error(`Expected listener file ${listenerFileName} to contain an array of events`);
+                throw Error(
+                    `Expected listener file ${listenerFileName} to contain an array of events`
+                );
             }
             if (listenerEvents.length === 0) {
                 return;
@@ -1393,7 +1408,7 @@ export class FileBackedVarStore extends VarStore {
             }
             this.resetListenerFile(listenerFileName);
         });
-        this.watchers.set(listenerUuid, { watcher, listenerFileName});
+        this.watchers.set(listenerUuid, { watcher, listenerFileName });
         return listenerUuid;
     }
 
@@ -1421,22 +1436,25 @@ export class FileBackedVarStore extends VarStore {
 
     // append [oldSha1: string, newSha1: string]> to the JSON array that is in
     // listenerFileName
-    updateListenerFiles(oldSha1: string | null, newSha1: string, varKey: VarKey) {
+    updateListenerFiles(
+        oldSha1: string | null,
+        newSha1: string,
+        varKey: VarKey
+    ) {
         const varListenerFolder = `${this.subscriptionsFolderPath}/${varKey}`;
         try {
             const files = fs.readdirSync(varListenerFolder);
             for (let subscriptionFile of files) {
-                const filePath = varListenerFolder + "/" + subscriptionFile
+                const filePath = varListenerFolder + "/" + subscriptionFile;
                 const listenerFileContents = fs.readFileSync(filePath, "utf8");
                 const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
                 listenerEvents.push([oldSha1, newSha1]);
-                const outStream = fs.createWriteStream(filePath, 'utf8');
+                const outStream = fs.createWriteStream(filePath, "utf8");
                 outStream.write(JSON.stringify(listenerEvents));
                 outStream.end();
             }
-        }
-        catch (err: any) {
-            if (err.code !== 'ENOENT') {
+        } catch (err: any) {
+            if (err.code !== "ENOENT") {
                 throw err;
             }
         }
@@ -1877,7 +1895,6 @@ export class Val {
     readonly __jsosValStore: ValStore;
     readonly __jsosSha1: string;
     readonly __jsosValObject: any;
-
 
     constructor(object: any, sha1: string, valStore: ValStore) {
         // TODO: make a deep copy of `object` so ensure it can't be mutated outside of this class
@@ -2332,7 +2349,7 @@ export async function GetOrNewVar(options: {
         autoPullUpdates = true,
         callback,
     } = options;
-    const gotVal = await GetVar({
+    const gotVaR = await GetVar({
         name,
         namespace,
         valStore,
@@ -2340,8 +2357,8 @@ export async function GetOrNewVar(options: {
         autoPullUpdates,
         callback,
     });
-    if (gotVal !== undefined) {
-        return gotVal;
+    if (gotVaR !== undefined) {
+        return gotVaR;
     }
     return await NewVar({
         name,
