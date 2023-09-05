@@ -33,11 +33,11 @@ export const VarContext = React.createContext<Array<Val | Function | null>>(
     []
 );
 
-export function useDataContext<S>(initialState: Val | (() => Val)): Array<Val | Function | null> {
+export function useVarContext<S>(initialState: Val | (() => Val)): Array<Val | Function | null> {
   const context = useContext(VarContext);
 
   if (context === undefined) {
-    throw new Error("useData must be used inside a DataProvider");
+    throw new Error("useVarContext must be used inside a DataProvider");
   }
 
   return context;

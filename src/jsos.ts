@@ -1,4 +1,4 @@
-/// <reference path="./idb-keyval.d.ts" />
+/// <reference path="../node_modules/idb-keyval/dist/index.d.ts" />
 import {
     SupabaseClient,
     RealtimeChannel,
@@ -15,13 +15,16 @@ import {
     Record as ImmutableRecord,
 } from "immutable";
 import { v4 as uuidv4 } from "uuid";
-import * as fs from "fs";
-import path from "path";
+//import * as fs from "fs";
+//import path from "path";
 import hash from "object-hash";
 import supabase from "./supabase";
 import { Mutex } from "async-mutex";
 import _ from "lodash";
-import { createStore, get, set, del } from "idb-keyval/dist/index.cjs";
+// This line seems to work in some cases (with vite serve dev)
+// but not with CRA (i.e. Weback/Babel/Craco)
+//import { createStore, get, set, del } from "idb-keyval/dist/index.cjs";
+//import { createStore, get, set, del } from "idb-keyval";
 
 /*
 =============================================================
@@ -471,10 +474,15 @@ export class ValStore {
         );
     }
 
-    // Throws an error if the object is not encoded and normalized.  If you
-    // fetch an object regardless of its type, use JsonStore.getJson()
+    // Returns undefined if no object with key `sha1` is present.  Throws an
+    // error if the object is found but not encoded and normalized.  If you want
+    // to fetch a object (regardless of its type) and skip denormalizing and
+    // deserializing it, then use JsonStore.getJson() directly.
     async getVal(sha1: string, freeze: boolean = true): Promise<any> {
         const encodedNormalized = await this.jsonStore.getJson(sha1);
+        if (typeof encodedNormalized === "undefined") {
+            return encodedNormalized
+        }
         if (!isEncodedNormalized(encodedNormalized)) {
             throw new Error(
                 `Expected object with hash ${sha1} to be encoded as normalized but it was not: ${encodedNormalized}`
@@ -1050,7 +1058,8 @@ export class InMemoryVarStore extends VarStore {
 export class BrowserIndexedDBJsonStore extends JsonStore {
     private readonly databaseName: string;
     private readonly storeName: string;
-    private store: ReturnType<typeof createStore>;
+    private store: any;
+    //private store: returntype<typeof createstore>;
 
     constructor(
         databaseName: string = `${OBJECT_STORE_NAME}DB`,
@@ -1059,7 +1068,15 @@ export class BrowserIndexedDBJsonStore extends JsonStore {
         super();
         this.databaseName = databaseName;
         this.storeName = storeName;
-        this.store = createStore(this.databaseName, this.storeName);
+        this.store = null;
+    }
+
+    async getStore(): Promise<any> {
+        if (!this.store) {
+            const idbKeyval = await import('idb-keyval');
+            this.store = await idbKeyval.createStore(this.databaseName, this.storeName); 
+        }
+        return this.store;
     }
 
     async hasJson(sha1: string): Promise<boolean> {
@@ -1067,18 +1084,21 @@ export class BrowserIndexedDBJsonStore extends JsonStore {
     }
 
     async getJson(sha1: string): Promise<Json> {
-        return await get(sha1, this.store);
+        const store = await this.getStore();
+        return await store.get(sha1, this.store);
     }
 
     async putJson(object: Json): Promise<string> {
         /* Write to memory & asynchronously persist to IndexDB */
         const key = getSha1(object);
-        await set(key, object, this.store);
+        const store = await this.getStore();
+        await store.set(key, object, this.store);
         return key;
     }
 
     async deleteJson(sha1: string): Promise<void> {
-        await del(sha1, this.store);
+        const store = await this.getStore();
+        await store.del(sha1, this.store);
     }
 }
 
@@ -1229,6 +1249,7 @@ export class BrowserLocalStorageVarStore extends VarStore {
 // A simple filesystem based JSON store (not available in browser).
 export class FileBackedJsonStore extends JsonStore {
     lockfile = require("proper-lockfile");
+    fs = require("fs");
     private jsonStoreFileName: string;
 
     constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
@@ -1237,19 +1258,19 @@ export class FileBackedJsonStore extends JsonStore {
         }
         super();
         this.jsonStoreFileName = fileName;
-        if (!fs.existsSync(this.jsonStoreFileName)) {
-            fs.writeFileSync(this.jsonStoreFileName, "{}", { flag: "wx" });
+        if (!this.fs.existsSync(this.jsonStoreFileName)) {
+            this.fs.writeFileSync(this.jsonStoreFileName, "{}", { flag: "wx" });
         }
     }
 
     #readJsonStoreFile(): { [key: string]: any } {
-        const file = fs.readFileSync(this.jsonStoreFileName, "utf8");
+        const file = this.fs.readFileSync(this.jsonStoreFileName, "utf8");
         return JSON.parse(file);
     }
 
     #writeJsonStoreFile(obj: Json): void {
         try {
-            fs.writeFileSync(this.jsonStoreFileName, JSON.stringify(obj));
+            this.fs.writeFileSync(this.jsonStoreFileName, JSON.stringify(obj));
         } catch (err) {
             console.error("Error writing to file: ", err);
         }
@@ -1297,282 +1318,284 @@ export class FileBackedJsonStore extends JsonStore {
 // var is updated, its corresponding <VAR_KEY> dir is touched which notifies
 // all listeners. Each time a
 // listener unsubscribes from updates
-export class FileBackedVarStore extends VarStore {
-    lockfile = require("proper-lockfile");
-    chokidar = require("chokidar");
-    // the "exit-hook" npm package didn't just work w/ ts-node, whereas this does.
-    exitHook = require("async-exit-hook");
-    private varStoreFileName: string;
-    private subscriptionsFolderPath: string;
-    watchers: Map<SubscriptionUUID, { watcher: any; listenerFileName: string }>;
-
-    constructor(
-        varStoreFilePath: string = VARIABLE_STORE_FILE_PATH,
-        subscriptionsFolderPath: string = SUBSCRIPTIONS_FOLDER_PATH
-    ) {
-        if (typeof window !== "undefined") {
-            throw new Error("FileBackedJsonStore is not available in browser");
-        }
-        super();
-        this.varStoreFileName = varStoreFilePath;
-        if (!fs.existsSync(this.varStoreFileName)) {
-            fs.writeFileSync(this.varStoreFileName, "{}", { flag: "wx" });
-        }
-        this.subscriptionsFolderPath = subscriptionsFolderPath;
-        if (!fs.existsSync(this.subscriptionsFolderPath)) {
-            fs.mkdirSync(this.subscriptionsFolderPath, { recursive: true });
-        }
-        this.watchers = new Map();
-        this.exitHook(() => {
-            try {
-                const subFiles = [...this.watchers.values()].map(
-                    (watcher) => watcher.listenerFileName
-                );
-                console.log(
-                    "cleaning up (i.e. deleting) sub files:: ",
-                    subFiles
-                );
-                subFiles.forEach((filename: string) => {
-                    fs.unlinkSync(filename);
-                    console.log("deleted", filename);
-                    // DELETE THE FOLDER THAT CONTAINED FILENAME IF IT IS NOW EMPTY
-                    const dir = path.dirname(filename);
-                    try {
-                        fs.rmdirSync(dir);
-                        console.log(
-                            "deleted empty Var subscription directory ",
-                            dir
-                        );
-                    } catch (error) {
-                        // Ignore error if directory is not empty
-                    }
-                });
-            } catch {
-                // per https://github.com/Tapppi/async-exit-hook/issues/10
-                process.exit(1);
-            }
-        });
-    }
-
-    getListenerFileName(varKey: VarKey, subscriptionUuid: SubscriptionUUID) {
-        return `${this.subscriptionsFolderPath}/${varKey}/${subscriptionUuid}`;
-    }
-
-    resetListenerFile(listenerFileName: string) {
-        const dir = path.dirname(listenerFileName);
-        if (!fs.existsSync(dir)) {
-            fs.mkdirSync(dir, { recursive: true });
-        }
-        const outStream = fs.createWriteStream(listenerFileName, "utf8");
-        outStream.write("[]");
-        outStream.end();
-    }
-
-    // Set up a listener to receive notifications of changes to the var store
-    // by others.
-    subscribeToUpdates(
-        name: string,
-        namespace: string | null,
-        callbackFn: VarUpdateCallback
-    ): string {
-        const listenerUuid = super.subscribeToUpdates(
-            name,
-            namespace,
-            callbackFn
-        );
-        const listenerFileName = this.getListenerFileName(
-            _toVarKey(name, namespace),
-            listenerUuid
-        );
-        if (fs.existsSync(listenerFileName)) {
-            throw Error(`Subscription file ${listenerFileName} already exists`);
-        }
-        this.resetListenerFile(listenerFileName);
-        const watcher = this.chokidar.watch(listenerFileName);
-        watcher.on("change", (path: string, stats: any) => {
-            const listenerFileContents = fs.readFileSync(
-                listenerFileName,
-                "utf8"
-            );
-            const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
-            if (!Array.isArray(listenerEvents)) {
-                throw Error(
-                    `Expected listener file ${listenerFileName} to contain an array of events`
-                );
-            }
-            if (listenerEvents.length === 0) {
-                return;
-            }
-            for (let [oldSha1, newSha1] of listenerEvents) {
-                this.notifyListeners(name, namespace, oldSha1, newSha1);
-            }
-            this.resetListenerFile(listenerFileName);
-        });
-        this.watchers.set(listenerUuid, { watcher, listenerFileName });
-        return listenerUuid;
-    }
-
-    unsubscribeFromUpdates(subscriptionUUID: string): boolean {
-        const success = super.unsubscribeFromUpdates(subscriptionUUID);
-        if (!success) {
-            return false;
-        }
-        const subscription = this.watchers.get(subscriptionUUID);
-        if (subscription) {
-            subscription.watcher.close();
-            if (!fs.existsSync(subscription.listenerFileName)) {
-                return false;
-            }
-            fs.unlinkSync(subscription.listenerFileName);
-            return true;
-        }
-        return false;
-    }
-
-    private readVarStoreFile(): { [key: string]: string } {
-        const file = fs.readFileSync(this.varStoreFileName, "utf8");
-        return JSON.parse(file);
-    }
-
-    // append [oldSha1: string, newSha1: string]> to the JSON array that is in
-    // listenerFileName
-    updateListenerFiles(
-        oldSha1: string | null,
-        newSha1: string,
-        varKey: VarKey
-    ) {
-        const varListenerFolder = `${this.subscriptionsFolderPath}/${varKey}`;
-        try {
-            const files = fs.readdirSync(varListenerFolder);
-            for (let subscriptionFile of files) {
-                const filePath = varListenerFolder + "/" + subscriptionFile;
-                const listenerFileContents = fs.readFileSync(filePath, "utf8");
-                const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
-                listenerEvents.push([oldSha1, newSha1]);
-                const outStream = fs.createWriteStream(filePath, "utf8");
-                outStream.write(JSON.stringify(listenerEvents));
-                outStream.end();
-            }
-        } catch (err: any) {
-            if (err.code !== "ENOENT") {
-                throw err;
-            }
-        }
-    }
-
-    async newVar(
-        name: string,
-        namespace: string | null,
-        valSha1: string
-    ): Promise<boolean> {
-        const release = await this.lockfile.lock(
-            this.varStoreFileName,
-            LOCKFILE_OPTIONS
-        );
-        try {
-            const varStore = this.readVarStoreFile();
-            const varKey = _toVarKey(name, namespace);
-            if (varKey in varStore) {
-                console.error(
-                    `var ${name} already exists in namespace ${namespace} in ` +
-                        `file ${this.varStoreFileName}. Did you mean to use ` +
-                        `updateVar() instead?`
-                );
-                return false;
-            }
-            varStore[varKey] = valSha1;
-            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-            this.updateListenerFiles(null, valSha1, varKey);
-            return true;
-        } catch (error) {
-            console.error(
-                "An error occurred while creating a new variable:",
-                error
-            );
-            throw error;
-        } finally {
-            release();
-        }
-    }
-
-    async updateVar(
-        name: string,
-        namespace: string | null,
-        oldSha1: string,
-        newSha1: string
-    ): Promise<boolean> {
-        const release = await this.lockfile.lock(
-            this.varStoreFileName,
-            LOCKFILE_OPTIONS
-        );
-        try {
-            const varStore = this.readVarStoreFile();
-            const varKey = _toVarKey(name, namespace);
-            if (varKey in varStore && varStore[varKey] !== oldSha1) {
-                return false;
-            }
-            varStore[varKey] = newSha1;
-            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-            this.updateListenerFiles(oldSha1, newSha1, varKey);
-            return true;
-        } catch (error) {
-            console.error(
-                "An error occurred while creating a new variable:",
-                error
-            );
-            throw error;
-        } finally {
-            release();
-        }
-    }
-
-    async getVar(
-        name: string,
-        namespace: string | null
-    ): Promise<string | undefined> {
-        const release = await this.lockfile.lock(
-            this.varStoreFileName,
-            LOCKFILE_OPTIONS
-        );
-        try {
-            const varStore = this.readVarStoreFile();
-            return varStore[_toVarKey(name, namespace)];
-        } catch (error) {
-            console.error(
-                "An error occurred while creating a new variable:",
-                error
-            );
-            throw error;
-        } finally {
-            release();
-        }
-    }
-
-    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
-        const release = await this.lockfile.lock(
-            this.varStoreFileName,
-            LOCKFILE_OPTIONS
-        );
-        try {
-            const varStore = this.readVarStoreFile();
-            const key = _toVarKey(name, namespace);
-            if (!(key in varStore)) {
-                return false;
-            }
-            delete varStore[key];
-            fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
-            return true;
-        } catch (error) {
-            console.error(
-                "An error occurred while creating a new variable:",
-                error
-            );
-            throw error;
-        } finally {
-            release();
-        }
-    }
-}
+//export class FileBackedVarStore extends VarStore {
+//    fs = require("fs");
+//    path = require("path");
+//    lockfile = require("proper-lockfile");
+//    chokidar = require("chokidar");
+//    // the "exit-hook" npm package didn't just work w/ ts-node, whereas this does.
+//    exitHook = require("async-exit-hook");
+//    private varStoreFileName: string;
+//    private subscriptionsFolderPath: string;
+//    watchers: Map<SubscriptionUUID, { watcher: any; listenerFileName: string }>;
+//
+//    constructor(
+//        varStoreFilePath: string = VARIABLE_STORE_FILE_PATH,
+//        subscriptionsFolderPath: string = SUBSCRIPTIONS_FOLDER_PATH
+//    ) {
+//        if (typeof window !== "undefined") {
+//            throw new Error("FileBackedJsonStore is not available in browser");
+//        }
+//        super();
+//        this.varStoreFileName = varStoreFilePath;
+//        if (!this.fs.existsSync(this.varStoreFileName)) {
+//            this.fs.writeFileSync(this.varStoreFileName, "{}", { flag: "wx" });
+//        }
+//        this.subscriptionsFolderPath = subscriptionsFolderPath;
+//        if (!this.fs.existsSync(this.subscriptionsFolderPath)) {
+//            this.fs.mkdirSync(this.subscriptionsFolderPath, { recursive: true });
+//        }
+//        this.watchers = new Map();
+//        this.exitHook(() => {
+//            try {
+//                const subFiles = [...this.watchers.values()].map(
+//                    (watcher) => watcher.listenerFileName
+//                );
+//                console.log(
+//                    "cleaning up (i.e. deleting) sub files:: ",
+//                    subFiles
+//                );
+//                subFiles.forEach((filename: string) => {
+//                    this.fs.unlinkSync(filename);
+//                    console.log("deleted", filename);
+//                    // DELETE THE FOLDER THAT CONTAINED FILENAME IF IT IS NOW EMPTY
+//                    const dir = this.path.dirname(filename);
+//                    try {
+//                        this.fs.rmdirSync(dir);
+//                        console.log(
+//                            "deleted empty Var subscription directory ",
+//                            dir
+//                        );
+//                    } catch (error) {
+//                        // Ignore error if directory is not empty
+//                    }
+//                });
+//            } catch {
+//                // per https://github.com/Tapppi/async-exit-hook/issues/10
+//                process.exit(1);
+//            }
+//        });
+//    }
+//
+//    getListenerFileName(varKey: VarKey, subscriptionUuid: SubscriptionUUID) {
+//        return `${this.subscriptionsFolderPath}/${varKey}/${subscriptionUuid}`;
+//    }
+//
+//    resetListenerFile(listenerFileName: string) {
+//        const dir = this.path.dirname(listenerFileName);
+//        if (!this.fs.existsSync(dir)) {
+//            this.fs.mkdirSync(dir, { recursive: true });
+//        }
+//        const outStream = this.fs.createWriteStream(listenerFileName, "utf8");
+//        outStream.write("[]");
+//        outStream.end();
+//    }
+//
+//    // Set up a listener to receive notifications of changes to the var store
+//    // by others.
+//    subscribeToUpdates(
+//        name: string,
+//        namespace: string | null,
+//        callbackFn: VarUpdateCallback
+//    ): string {
+//        const listenerUuid = super.subscribeToUpdates(
+//            name,
+//            namespace,
+//            callbackFn
+//        );
+//        const listenerFileName = this.getListenerFileName(
+//            _toVarKey(name, namespace),
+//            listenerUuid
+//        );
+//        if (this.fs.existsSync(listenerFileName)) {
+//            throw Error(`Subscription file ${listenerFileName} already exists`);
+//        }
+//        this.resetListenerFile(listenerFileName);
+//        const watcher = this.chokidar.watch(listenerFileName);
+//        watcher.on("change", (path: string, stats: any) => {
+//            const listenerFileContents = this.fs.readFileSync(
+//                listenerFileName,
+//                "utf8"
+//            );
+//            const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
+//            if (!Array.isArray(listenerEvents)) {
+//                throw Error(
+//                    `Expected listener file ${listenerFileName} to contain an array of events`
+//                );
+//            }
+//            if (listenerEvents.length === 0) {
+//                return;
+//            }
+//            for (let [oldSha1, newSha1] of listenerEvents) {
+//                this.notifyListeners(name, namespace, oldSha1, newSha1);
+//            }
+//            this.resetListenerFile(listenerFileName);
+//        });
+//        this.watchers.set(listenerUuid, { watcher, listenerFileName });
+//        return listenerUuid;
+//    }
+//
+//    unsubscribeFromUpdates(subscriptionUUID: string): boolean {
+//        const success = super.unsubscribeFromUpdates(subscriptionUUID);
+//        if (!success) {
+//            return false;
+//        }
+//        const subscription = this.watchers.get(subscriptionUUID);
+//        if (subscription) {
+//            subscription.watcher.close();
+//            if (!this.fs.existsSync(subscription.listenerFileName)) {
+//                return false;
+//            }
+//            this.fs.unlinkSync(subscription.listenerFileName);
+//            return true;
+//        }
+//        return false;
+//    }
+//
+//    private readVarStoreFile(): { [key: string]: string } {
+//        const file = this.fs.readFileSync(this.varStoreFileName, "utf8");
+//        return JSON.parse(file);
+//    }
+//
+//    // append [oldSha1: string, newSha1: string]> to the JSON array that is in
+//    // listenerFileName
+//    updateListenerFiles(
+//        oldSha1: string | null,
+//        newSha1: string,
+//        varKey: VarKey
+//    ) {
+//        const varListenerFolder = `${this.subscriptionsFolderPath}/${varKey}`;
+//        try {
+//            const files = this.fs.readdirSync(varListenerFolder);
+//            for (let subscriptionFile of files) {
+//                const filePath = varListenerFolder + "/" + subscriptionFile;
+//                const listenerFileContents = this.fs.readFileSync(filePath, "utf8");
+//                const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
+//                listenerEvents.push([oldSha1, newSha1]);
+//                const outStream = this.fs.createWriteStream(filePath, "utf8");
+//                outStream.write(JSON.stringify(listenerEvents));
+//                outStream.end();
+//            }
+//        } catch (err: any) {
+//            if (err.code !== "ENOENT") {
+//                throw err;
+//            }
+//        }
+//    }
+//
+//    async newVar(
+//        name: string,
+//        namespace: string | null,
+//        valSha1: string
+//    ): Promise<boolean> {
+//        const release = await this.lockfile.lock(
+//            this.varStoreFileName,
+//            LOCKFILE_OPTIONS
+//        );
+//        try {
+//            const varStore = this.readVarStoreFile();
+//            const varKey = _toVarKey(name, namespace);
+//            if (varKey in varStore) {
+//                console.error(
+//                    `var ${name} already exists in namespace ${namespace} in ` +
+//                        `file ${this.varStoreFileName}. Did you mean to use ` +
+//                        `updateVar() instead?`
+//                );
+//                return false;
+//            }
+//            varStore[varKey] = valSha1;
+//            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+//            this.updateListenerFiles(null, valSha1, varKey);
+//            return true;
+//        } catch (error) {
+//            console.error(
+//                "An error occurred while creating a new variable:",
+//                error
+//            );
+//            throw error;
+//        } finally {
+//            release();
+//        }
+//    }
+//
+//    async updateVar(
+//        name: string,
+//        namespace: string | null,
+//        oldSha1: string,
+//        newSha1: string
+//    ): Promise<boolean> {
+//        const release = await this.lockfile.lock(
+//            this.varStoreFileName,
+//            LOCKFILE_OPTIONS
+//        );
+//        try {
+//            const varStore = this.readVarStoreFile();
+//            const varKey = _toVarKey(name, namespace);
+//            if (varKey in varStore && varStore[varKey] !== oldSha1) {
+//                return false;
+//            }
+//            varStore[varKey] = newSha1;
+//            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+//            this.updateListenerFiles(oldSha1, newSha1, varKey);
+//            return true;
+//        } catch (error) {
+//            console.error(
+//                "An error occurred while creating a new variable:",
+//                error
+//            );
+//            throw error;
+//        } finally {
+//            release();
+//        }
+//    }
+//
+//    async getVar(
+//        name: string,
+//        namespace: string | null
+//    ): Promise<string | undefined> {
+//        const release = await this.lockfile.lock(
+//            this.varStoreFileName,
+//            LOCKFILE_OPTIONS
+//        );
+//        try {
+//            const varStore = this.readVarStoreFile();
+//            return varStore[_toVarKey(name, namespace)];
+//        } catch (error) {
+//            console.error(
+//                "An error occurred while creating a new variable:",
+//                error
+//            );
+//            throw error;
+//        } finally {
+//            release();
+//        }
+//    }
+//
+//    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+//        const release = await this.lockfile.lock(
+//            this.varStoreFileName,
+//            LOCKFILE_OPTIONS
+//        );
+//        try {
+//            const varStore = this.readVarStoreFile();
+//            const key = _toVarKey(name, namespace);
+//            if (!(key in varStore)) {
+//                return false;
+//            }
+//            delete varStore[key];
+//            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+//            return true;
+//        } catch (error) {
+//            console.error(
+//                "An error occurred while creating a new variable:",
+//                error
+//            );
+//            throw error;
+//        } finally {
+//            release();
+//        }
+//    }
+//}
 
 class SupabaseJsonStore extends JsonStore {
     supabaseClient: SupabaseClient;
@@ -1885,7 +1908,7 @@ DEFAULT_VALUE_STORE_LIST.push(new InMemoryJsonStore());
 if (typeof window !== "undefined") {
     DEFAULT_VALUE_STORE_LIST.push(new BrowserIndexedDBJsonStore());
 } else {
-    DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
+    //DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
 }
 export let DEFAULT_VALUE_STORE = new ValStore(
     new MultiJsonStore(DEFAULT_VALUE_STORE_LIST)
@@ -2004,7 +2027,7 @@ export let DEFAULT_VARIABLE_STORE: VarStore;
 if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
     DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
 } else {
-    DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+    //DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
 }
 
 // A shared mutable object.

@@ -1,10 +1,10 @@
 import { Val, Var, NewVal, GetVar, NewVar, GetOrNewVar } from "./jsos";
-import JsosContextProvider, { VarContext } from "./JsosContext";
+import JsosContextProvider, { useVarContext } from "./JsosContext";
 import useVar from "./useVar";
 
 export {
     JsosContextProvider,
-    VarContext as DataContext,
+    useVarContext,
     useVar,
     Val,
     Var,
