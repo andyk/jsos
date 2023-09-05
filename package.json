@@ -35,7 +35,6 @@
   },
   "scripts": {
     "prepack": "tsc",
-    "prepublish": "npm run compile",
     "test": "jest"
   },
   "engines": {
