@@ -4,7 +4,7 @@
 This is a Javascript/Typescript client for JSOS (JavaScript Object Store), which is a language agnostic framework for transparent object persistence and sharing.
 
 This implementation supports persisting Javascript objects to multiple types of JSON object stores, including:
-* In-browser IndexDB & LocalStorage
+* Built-in Browser persistent storage (IndexDB & LocalStorage)
 * Local FileSystem based JSON file storage - For use via Javascript in Node.
 * [Supabase](https://supabase.com) - which is an open source wrapper around Postgres, PostgREST, a Websockets server, etc.)
 
