@@ -23,8 +23,7 @@ To use supabase for both the ValStore and VarStore, use
 
     <JsosContextProvider name="myVar" supabaseAPIKey="YOUR_KEY_HERE">
 */
-import React, { useEffect } from "react";
-import { useContext } from "react";
+import React, { useEffect, useContext} from "react";
 import { Val, GetOrNewVar } from "./jsos";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
@@ -73,7 +72,6 @@ export default function JsosContextProvider({
                 name,
                 namespace,
                 defaultVal: { games: {}},
-                callback: varChanged,
             });
             setJsosVar(fetchedVar);
             console.log("finished init setAppData to: ", fetchedVar);

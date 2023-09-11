@@ -1,5 +1,5 @@
 import React, { useEffect }  from 'react';
-import { GetOrNewVar } from './jsos';
+import { GetOrNewVar, GetVar } from './jsos';
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
@@ -8,18 +8,23 @@ type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 const useVar = (name: string, namespace?: string, defaultVal?: any) => {
     // we have to wrap our Var in something since React tests to see if state
     // has changed using Object.is.
-    const [jsosVar, setJsosVar] = React.useState<null | any>({Var: null});
+    const [jsosVar, setJsosVar] = React.useState<null | any>({ Var: defaultVal });
 
     function varChanged(
-        name: string,
-        namespace: string | null,
+        varChangedName: string,
+        varChangedNamespace: string | null,
         newSha1: string | null,
         oldSha1: string
     ) {
-        console.log("varChanged triggered: ", name, namespace, oldSha1, newSha1);
-        setJsosVar(({ Var }: { Var: any }) => {
-            Var.__jsosPull();
-            return { Var };
+        console.log("varChanged triggered: ", varChangedName, varChangedNamespace, oldSha1, newSha1);
+        if (name !== varChangedName || namespace !== varChangedNamespace) {
+            console.log("useVar(", name, ", ", namespace, " got update tha we don't care about: ", varChangedName, varChangedNamespace);
+            return;
+        }
+        setJsosVar(async ({ Var }: { Var: any }) => {
+            const newVar = await GetVar({ name, namespace });
+            console.log("setting Var to: ", Var, "newVar === oldvar: ", newVar === Var);
+            return { newVar };
         });
     }
 
@@ -29,7 +34,7 @@ const useVar = (name: string, namespace?: string, defaultVal?: any) => {
                 name,
                 namespace,
                 defaultVal,
-                autoPullUpdates: false,
+                autoPullUpdates: true,
                 callback: varChanged,
             });
             setJsosVar({ Var: fetchedVar });
@@ -50,7 +55,7 @@ const useVar = (name: string, namespace?: string, defaultVal?: any) => {
         setJsosVar({ Var: v });
     }
 
-    return [jsosVar.Var, updateVar];
+    return [jsosVar.Var.__jsosVarObj, updateVar];
 }
 
 export default useVar;

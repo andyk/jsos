@@ -1,4 +1,3 @@
-/// <reference path="../node_modules/idb-keyval/dist/index.d.ts" />
 import {
     SupabaseClient,
     RealtimeChannel,
@@ -21,10 +20,12 @@ import hash from "object-hash";
 import supabase from "./supabase";
 import { Mutex } from "async-mutex";
 import _ from "lodash";
+// import { createStore, get, set, del } from "idb-keyval";
 // This line seems to work in some cases (with vite serve dev)
 // but not with CRA (i.e. Weback/Babel/Craco)
-//import { createStore, get, set, del } from "idb-keyval/dist/index.cjs";
-//import { createStore, get, set, del } from "idb-keyval";
+// import { createStore, get, set, del } from "idbKeyval/dist/index.cjs";
+// Giving up on installing via npm and just copying the source code.
+import { createStore, get, set, del } from "./idbKeyVal";
 
 /*
 =============================================================
@@ -117,6 +118,9 @@ const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
 
 type Primitive = string | number | boolean | null;
+// NotUndefind copied from https://github.com/puleos/object-hash#hashvalue-options
+// Not sure why the NotUndefined[] part is necessary and not covered by the object part.
+type NotUndefined = object | Primitive | NotUndefined[];
 type ValRef = `${typeof VALUE_REF_PREFIX}${string}`;
 type NormalizedJson = Primitive | { [key: string]: ValRef } | ValRef[];
 type Json = Primitive | { [key: string]: Json } | Json[];
@@ -124,12 +128,13 @@ type EncodedNormalized = [
     string,
     { objectSha1: string; manifest: Array<string> }
 ];
-export type VarUpdateCallback = (
+export type VarStoreSubCallback = (
     name: string,
     namespace: string | null,
     oldSha1: string | null,
     newSha1: string
 ) => void;
+export type VarUpdateCallback = (newVar: Var) => void;
 type SyncValUpdateFn = (old: any) => any;
 type AsyncValUpdateFn = (old: any) => Promise<any>;
 type VarKey = string;
@@ -187,7 +192,7 @@ function isCustomStorageEvent(
 }
 
 // TODO: cache sha1's in memory using object identity as key
-export function getSha1(o: any): string {
+export function getSha1(o: NotUndefined): string {
     return hash(o, { algorithm: "sha1", encoding: "hex" });
 }
 
@@ -201,6 +206,14 @@ function _toValRef(obj: any): string {
 
 function _sha265FromValRef(ref: string): string {
     return ref.slice(VALUE_REF_PREFIX.length);
+}
+
+function _isVarKey(obj: any) {
+    return (
+        obj &&
+        typeof obj === "string" &&
+        obj.startsWith(VARIABLE_STR_KEY_PREFIX)
+    );
 }
 
 function _toVarKey(name: string, namespace: string | null): VarKey {
@@ -428,7 +441,7 @@ export class ValStore {
     //       }
     //     ]
     //   }>
-    async putVal(object: any): Promise<[string, EncodedNormalized]> {
+    async putVal(object: NotUndefined): Promise<[string, EncodedNormalized]> {
         const putNormalized = await this.encodeNormalizePutVal(object);
         const encodedNormalized = this.encodeNormalized(
             putNormalized.map((pair) => pair[0])
@@ -444,9 +457,10 @@ export class ValStore {
         return [encodedNormalizedSha1, encodedNormalized];
     }
 
+    // Encode then normalize then put the value into the underlying JsonStore.
     // Outer-most normalized object is last in the returned array.
     async encodeNormalizePutVal(
-        object: any
+        object: NotUndefined
     ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
         const normalized = this.normalize(encoded);
@@ -468,7 +482,9 @@ export class ValStore {
     // TODO: combine all parallel underlying calls to putJsons() into a single
     // call to putJsons() to improve performance via batching of any potential
     // underlying network calls.
-    async putVals(objects: Array<any>): Promise<Array<[string, Json]>> {
+    async putVals(
+        objects: Array<NotUndefined>
+    ): Promise<Array<[string, Json]>> {
         return await Promise.all(
             objects.map(async (object) => await this.putVal(object))
         );
@@ -481,7 +497,7 @@ export class ValStore {
     async getVal(sha1: string, freeze: boolean = true): Promise<any> {
         const encodedNormalized = await this.jsonStore.getJson(sha1);
         if (typeof encodedNormalized === "undefined") {
-            return encodedNormalized
+            return encodedNormalized;
         }
         if (!isEncodedNormalized(encodedNormalized)) {
             throw new Error(
@@ -522,7 +538,7 @@ export class ValStore {
         await this.jsonStore.deleteJsons(sha1Array);
     }
 
-    encode(object: any): Json {
+    encode(object: NotUndefined): Json {
         return this.recursiveEncode(object, new Map<any, any>());
     }
 
@@ -584,7 +600,7 @@ export class ValStore {
     // TODO: upgrade to using https://github.com/WebReflection/flatted
     // or https://github.com/ungap/structured-clone for encoding/decoding
     // Date, Boolean, etc. and handling objects w/ circular references.
-    private shallowEncode(object: any): any {
+    private shallowEncode(object: NotUndefined): any {
         if (object instanceof Date) {
             return [DATE_KEY, object.toISOString()];
         }
@@ -870,7 +886,9 @@ export abstract class VarStore {
         namespace: string | null
     ): Promise<string | undefined>;
 
-    // returns true if the var did not exist and was created. Else returns false.
+    // returns true if the var did not exist and was created. If
+    // the var exists already, returns false. If var did not exist
+    // and was not created, throws an error.
     abstract newVar(
         name: string,
         namespace: string | null,
@@ -902,15 +920,24 @@ export abstract class VarStore {
     ): Promise<boolean>;
 
     // varListeners is a map of varKey (i.e. name, namespace) -> Map<subscriptionUUID, callbackFn>
-    varListeners: Map<VarKey, Map<SubscriptionUUID, VarUpdateCallback>> =
+    varListeners: Map<VarKey, Map<SubscriptionUUID, VarStoreSubCallback>> =
         new Map();
     subscriptionIdToVarKey: Map<SubscriptionUUID, VarKey> = new Map();
 
     // Returns a subscription UUID that can be used to unsubscribe from updates.
+    // The calls to callbackFn are guaranteed to come in-order, i.e., since
+    // the callbacks can contain the oldSha1 and newSha1, you can use them to
+    // build a linked-list of updates to the var and we don't want the subscriber
+    // to have to worry about out-of-order updates, so it is up to the VarStore
+    // implementations to queue any potential out-of-order updates (which might
+    // happen, e.g., if the VarStore is backed by a network server or a
+    // distributed database) and then only call the callbackFn when it has
+    // received all of the necessary updates to ensure that the callbacks are
+    // called in-order.
     subscribeToUpdates(
         name: string,
         namespace: string | null,
-        callbackFn: VarUpdateCallback
+        callbackFn: VarStoreSubCallback
     ): SubscriptionUUID {
         const uuid = uuidv4();
         const varKey = _toVarKey(name, namespace);
@@ -948,7 +975,7 @@ export abstract class VarStore {
 }
 
 export class InMemoryJsonStore extends JsonStore {
-    private valMap: Map<string, any>;
+    private valMap: Map<string, Json>;
 
     constructor() {
         super();
@@ -959,11 +986,12 @@ export class InMemoryJsonStore extends JsonStore {
         return this.valMap.has(sha1);
     }
 
+    // If the sha1 is not present, returns undefined.
     async getJson(sha1: string): Promise<any> {
         return this.valMap.get(sha1);
     }
 
-    async putJson(object: any): Promise<string> {
+    async putJson(object: Json): Promise<string> {
         const sha1 = getSha1(object);
         this.valMap.set(sha1, object);
         return sha1;
@@ -1053,13 +1081,10 @@ export class InMemoryVarStore extends VarStore {
 // database connections and updates." Thus, we create a new database for each
 // store and use the same store name for each (i.e., this.INDEXEDDB_STORE_NAME)
 // [1] https://github.com/jakearchibald/idb-keyval/blob/main/custom-stores.md
-
-// An in-memory cache backed by IndexedDB.
 export class BrowserIndexedDBJsonStore extends JsonStore {
     private readonly databaseName: string;
     private readonly storeName: string;
-    private store: any;
-    //private store: returntype<typeof createstore>;
+    private store: ReturnType<typeof createStore>;
 
     constructor(
         databaseName: string = `${OBJECT_STORE_NAME}DB`,
@@ -1068,37 +1093,26 @@ export class BrowserIndexedDBJsonStore extends JsonStore {
         super();
         this.databaseName = databaseName;
         this.storeName = storeName;
-        this.store = null;
-    }
-
-    async getStore(): Promise<any> {
-        if (!this.store) {
-            const idbKeyval = await import('idb-keyval');
-            this.store = await idbKeyval.createStore(this.databaseName, this.storeName); 
-        }
-        return this.store;
+        this.store = createStore(this.databaseName, this.storeName);
     }
 
     async hasJson(sha1: string): Promise<boolean> {
         return (await this.getJson(sha1)) ? true : false;
     }
 
-    async getJson(sha1: string): Promise<Json> {
-        const store = await this.getStore();
-        return await store.get(sha1, this.store);
+    async getJson(sha1: string): Promise<Json | undefined> {
+        return await get(sha1, this.store);
     }
 
     async putJson(object: Json): Promise<string> {
         /* Write to memory & asynchronously persist to IndexDB */
         const key = getSha1(object);
-        const store = await this.getStore();
-        await store.set(key, object, this.store);
+        await set(key, object, this.store);
         return key;
     }
 
     async deleteJson(sha1: string): Promise<void> {
-        const store = await this.getStore();
-        await store.del(sha1, this.store);
+        await del(sha1, this.store);
     }
 }
 
@@ -1169,16 +1183,23 @@ export class BrowserLocalStorageVarStore extends VarStore {
                 "New Val:",
                 e.newValue
             );
-            const { name, namespace } = _fromVarKey(e.key);
-            if (e.newValue) {
-                this.notifyListeners(name, namespace, e.oldValue, e.newValue);
+            if (_isVarKey(e.key)) {
+                const { name, namespace } = _fromVarKey(e.key);
+                if (e.newValue) {
+                    this.notifyListeners(
+                        name,
+                        namespace,
+                        e.oldValue,
+                        e.newValue
+                    );
+                }
             }
         });
 
         // listen to updates from this tab
         setupCustomLocalStorageObserver();
         window.addEventListener("customStorage", (e: Event) => {
-            if (isCustomStorageEvent(e)) {
+            if (isCustomStorageEvent(e) && _isVarKey(e.detail.key)) {
                 console.log(
                     "Key Modified:",
                     e.detail.key,
@@ -1247,68 +1268,68 @@ export class BrowserLocalStorageVarStore extends VarStore {
 }
 
 // A simple filesystem based JSON store (not available in browser).
-export class FileBackedJsonStore extends JsonStore {
-    lockfile = require("proper-lockfile");
-    fs = require("fs");
-    private jsonStoreFileName: string;
-
-    constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
-        if (typeof window !== "undefined") {
-            throw new Error("FileBackedJsonStore is not available in browser");
-        }
-        super();
-        this.jsonStoreFileName = fileName;
-        if (!this.fs.existsSync(this.jsonStoreFileName)) {
-            this.fs.writeFileSync(this.jsonStoreFileName, "{}", { flag: "wx" });
-        }
-    }
-
-    #readJsonStoreFile(): { [key: string]: any } {
-        const file = this.fs.readFileSync(this.jsonStoreFileName, "utf8");
-        return JSON.parse(file);
-    }
-
-    #writeJsonStoreFile(obj: Json): void {
-        try {
-            this.fs.writeFileSync(this.jsonStoreFileName, JSON.stringify(obj));
-        } catch (err) {
-            console.error("Error writing to file: ", err);
-        }
-    }
-
-    async hasJson(sha1: string): Promise<boolean> {
-        return sha1 in this.#readJsonStoreFile();
-    }
-
-    async getJson(sha1: string): Promise<Json> {
-        return this.#readJsonStoreFile()[sha1];
-    }
-
-    async putJson(object: Json): Promise<string> {
-        /* Write to memory & asynchronously persist to IndexDB or FS. */
-        //const release = await this.lockfile.lock(
-        //    this.jsonStoreFileName,
-        //    LOCKFILE_OPTIONS
-        //);
-        const key = getSha1(object);
-        const jsonStore = this.#readJsonStoreFile();
-        jsonStore[key] = object;
-        this.#writeJsonStoreFile(jsonStore);
-        //release();
-        return key;
-    }
-
-    async deleteJson(sha1: string): Promise<void> {
-        //const release = await this.lockfile.lock(
-        //    this.jsonStoreFileName,
-        //    LOCKFILE_OPTIONS
-        //);
-        const jsonStore = this.#readJsonStoreFile();
-        delete jsonStore[sha1];
-        this.#writeJsonStoreFile(jsonStore);
-        //release();
-    }
-}
+//export class FileBackedJsonStore extends JsonStore {
+//    lockfile = require("proper-lockfile");
+//    fs = require("fs");
+//    private jsonStoreFileName: string;
+//
+//    constructor(fileName: string = OBJECT_STORE_FILE_PATH) {
+//        if (typeof window !== "undefined") {
+//            throw new Error("FileBackedJsonStore is not available in browser");
+//        }
+//        super();
+//        this.jsonStoreFileName = fileName;
+//        if (!this.fs.existsSync(this.jsonStoreFileName)) {
+//            this.fs.writeFileSync(this.jsonStoreFileName, "{}", { flag: "wx" });
+//        }
+//    }
+//
+//    #readJsonStoreFile(): { [key: string]: any } {
+//        const file = this.fs.readFileSync(this.jsonStoreFileName, "utf8");
+//        return JSON.parse(file);
+//    }
+//
+//    #writeJsonStoreFile(obj: Json): void {
+//        try {
+//            this.fs.writeFileSync(this.jsonStoreFileName, JSON.stringify(obj));
+//        } catch (err) {
+//            console.error("Error writing to file: ", err);
+//        }
+//    }
+//
+//    async hasJson(sha1: string): Promise<boolean> {
+//        return sha1 in this.#readJsonStoreFile();
+//    }
+//
+//    async getJson(sha1: string): Promise<Json> {
+//        return this.#readJsonStoreFile()[sha1];
+//    }
+//
+//    async putJson(object: Json): Promise<string> {
+//        /* Write to memory & asynchronously persist to IndexDB or FS. */
+//        //const release = await this.lockfile.lock(
+//        //    this.jsonStoreFileName,
+//        //    LOCKFILE_OPTIONS
+//        //);
+//        const key = getSha1(object);
+//        const jsonStore = this.#readJsonStoreFile();
+//        jsonStore[key] = object;
+//        this.#writeJsonStoreFile(jsonStore);
+//        //release();
+//        return key;
+//    }
+//
+//    async deleteJson(sha1: string): Promise<void> {
+//        //const release = await this.lockfile.lock(
+//        //    this.jsonStoreFileName,
+//        //    LOCKFILE_OPTIONS
+//        //);
+//        const jsonStore = this.#readJsonStoreFile();
+//        delete jsonStore[sha1];
+//        this.#writeJsonStoreFile(jsonStore);
+//        //release();
+//    }
+//}
 
 // A simple filesystem based Var store (not available in browser).
 // Pub-Sub by listeners to variable updates is also handled via the file system
@@ -1930,11 +1951,11 @@ export class Val {
                     return Reflect.get(target, prop, receiver);
                 } else {
                     const jsosObject = target.__jsosValObject;
-                    if (jsosObject === null) {
+                    if (jsosObject === null || jsosObject === undefined) {
                         // Since Vals can wrap null, we have to gracefully
                         // handle the case of attemted property accesses on
                         // null.
-                        return null;
+                        return jsosObject;
                     }
                     if (jsosObject !== Object(jsosObject)) {
                         // If target.__jsosObject is a primitive, then it
@@ -1996,12 +2017,11 @@ export class Val {
 }
 
 type ValWrapper<T> = T extends null ? Val : T & Val;
-//type VarWrapper<T> = T extends null ? Var : T & Var;
 type VarWrapper<T> = T extends null
     ? Var
     : (T extends infer U & Val ? U : T) & Var;
 
-export async function NewVal<T>(options: {
+export async function NewVal<T extends NotUndefined>(options: {
     object: T;
     valStore?: ValStore;
 }): Promise<ValWrapper<T>> {
@@ -2011,12 +2031,18 @@ export async function NewVal<T>(options: {
     return new Val(putVal, sha1, valStore) as ValWrapper<T>;
 }
 
-export async function ValFromSha1(options: {
+// Returns undefined if the Val is not found in the ValStore. It isn't a problem
+// to use undefined to mean "not found" because undefined is not a valid Val by
+// our semantic definition, i.e., undefined is not just a special type of val.
+export async function GetVal(options: {
     sha1: string;
     valStore?: ValStore;
-}): Promise<Val> {
+}): Promise<Val | undefined> {
     const { sha1, valStore = DEFAULT_VALUE_STORE } = options;
     const obj = await valStore.getVal(sha1);
+    if (obj === undefined) {
+        return undefined;
+    }
     return new Val(obj, sha1, valStore);
 }
 
@@ -2028,6 +2054,70 @@ if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
     DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
 } else {
     //DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
+    DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
+}
+
+class VarBase {
+    __jsosVarStore: VarStore;
+    __jsosName: string;
+    __jsosNamespace: string | null;
+    __jsosVal: Val;
+    // __jsosVarObj is a local in-memory object that can be synchronously updated by the user via proxy methods on this Var.
+    // Updates to it are pushed async to the VarStore, and it can be updated in the other direction via either __jsosPull() or
+    // by subscribing to updates. If push fails due to optimistic concurrency control, then an error is thrown.
+    __jsosVarObj: any;
+    __jsosParentVal?: Val;
+
+    constructor(
+        name: string,
+        namespace: string | null,
+        jsosVal: Val,
+        object: any,
+        varStore: VarStore,
+        parentVal?: Val
+    ) {
+        this.__jsosVarStore = varStore;
+        this.__jsosName = name;
+        this.__jsosNamespace = namespace;
+        this.__jsosVal = jsosVal;
+        this.__jsosVarObj = object;
+        this.__jsosParentVal = parentVal;
+    }
+
+    // Actually making this private via `#...` syntax breaks with how we use a
+    // Proxy in our constructor. Might work but be uglier to use a symbol method
+    // here.
+    protected async __private_jsosPointToNewVal(newSha1: string): Promise<void> {
+        const newVal = await GetVal({
+            sha1: newSha1,
+            valStore: this.__jsosVal.__jsosValStore,
+        });
+        if (!newVal) {
+            throw Error(
+                `Cannot update Var name=${this.__jsosName}, ` +
+                `namespace = ${this.__jsosNamespace} to a Val ` +
+                `that does not exist in ValStore.`
+            );
+        }
+        this.__jsosVal = newVal;
+        this.__jsosVarObj = await this.__jsosVal.__jsosObjectCopy(false);
+    }
+
+    get __jsosSha1(): string {
+        return this.__jsosVal.__jsosSha1;
+    }
+
+    __jsosEquals(other: VarBase) {
+        return (
+            this.__jsosName === other.__jsosName &&
+            this.__jsosNamespace === other.__jsosNamespace &&
+            this.__jsosVal.__jsosEquals(other.__jsosVal)
+        );
+    }
+
+    __jsosIsVar(): true {
+        return true;
+    }
 }
 
 // A shared mutable object.
@@ -2073,40 +2163,15 @@ if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
 // thow an error if the var has been changed in
 // __jsosVarStore since this var last pulled updates from it
 // either via subscribing to updates or via calling __jsosPull().
-export class Var {
+export class Var extends VarBase{
     /*
        A Var has a name, optionally a namespace, and the address (i.e., sha1) of a Val.
         A var can be updated to refer to a different Val. This is done via an atomic
         update to the backing database.
         By default a Var is subscribed to Supabase postgres updates to the var.
     */
-    __jsosVarStore: VarStore;
-    __jsosName: string;
-    __jsosNamespace: string | null;
-    __jsosVal: Val;
-    // __jsosVarObj is a local in-memory object that can be synchronously updated by the user via proxy methods on this Var.
-    // Updates to it are pushed async to the VarStore, and it can be updated in the other direction via either __jsosPull() or
-    // by subscribing to updates. If push fails due to optimistic concurrency control, then an error is thrown.
-    __jsosVarObj: any;
-    __jsosParentVal?: Val;
-    __jsosAutoPullUpdates: boolean;
-    __jsosSubscriptionIDs: Array<string>;
-    // TODO: implement IsConst, ReadOnly, and Pull()
-    // If true, this Var behaves like a named Val by making it immutable.
-    // To make changes one has to update the Var to make this false.
-    // Note that this does *not* make the var immutable in the VarStore,
-    // just immutable via this Var object.
-    //__jsosIsConst: boolean;
-    // while true, causes local mutations to this var to fail, though remote
-    // changes can still be pulled in. This is a useful guard against accidental
-    // updates.
-    //__jsosIsReadOnly: boolean;
-    // Fetch Val from VarStore and set __jsosVal to it,
-    // overwriting whaterver val is there. This will throw an error if
-    // __jsosIsConst is true. Pulling updates is useful when
-    // __jsosAutoPullUpdates is false, in which case it gives you
-    // control over when to sync this Var to the shared val.
-    //__jsosPull(): void;
+    #__jsosAutoPullUpdates: boolean; // accessed via getter/setter that also updates __jsosSubscriptionID.
+    #__jsosSubscriptionID: string | null; // accessed via getter/set based on state of __autoPullUpdates.
 
     constructor(
         name: string,
@@ -2115,71 +2180,42 @@ export class Var {
         object: any,
         varStore: VarStore,
         autoPullUpdates: boolean,
-        callback: VarUpdateCallback | null = null,
         parentVal?: Val
     ) {
-        this.__jsosVarStore = varStore;
-        this.__jsosName = name;
-        this.__jsosNamespace = namespace;
-        this.__jsosVal = jsosVal;
-        this.__jsosVarObj = object;
-        this.__jsosAutoPullUpdates = autoPullUpdates;
-        this.__jsosSubscriptionIDs = [];
+        super(
+            name,
+            namespace,
+            jsosVal,
+            object,
+            varStore,
+            parentVal
+        );
+        this.#__jsosAutoPullUpdates = autoPullUpdates;
+        this.#__jsosSubscriptionID = null;
         this.__jsosParentVal = parentVal;
-        if (autoPullUpdates) {
-            const newSub = this.__jsosVarStore.subscribeToUpdates(
-                name,
-                namespace,
-                async (
-                    name: string,
-                    namespace: string | null,
-                    oldSha1: string | null,
-                    newSha1: string
-                ): Promise<void> => {
-                    if (
-                        name === this.__jsosName &&
-                        namespace === this.__jsosNamespace
-                    ) {
-                        this.__jsosVal = await ValFromSha1({
-                            sha1: newSha1,
-                            valStore: this.__jsosVal.__jsosValStore,
-                        });
-                        this.__jsosVarObj =
-                            await this.__jsosVal.__jsosObjectCopy(false);
-                        //console.debug(
-                        //    `Var (name=${this.__jsosName}, namespace=${this.__jsosNamespace} ` +
-                        //        `updated via subscription: oldSha1=${oldSha1}, newSha1=${newSha1}`
-                        //);
-                        //if (oldSha1 !== this.__jsosVal.__jsosSha1) {
-                        //    console.debug(
-                        //        "NOTE: skipping lineage during update from subscription: " +
-                        //            "oldSha1 !== Var's current __jsosSha1"
-                        //    );
-                        //}
-                    }
-                }
-            );
-            this.__jsosSubscriptionIDs.concat(newSub);
-            if (callback) {
-                this.__jsosSubscriptionIDs.concat(
-                    this.__jsosVarStore.subscribeToUpdates(
-                        name,
-                        namespace,
-                        callback
-                    )
-                );
-            }
-        }
 
         return new Proxy(this, {
             get: (target, prop, receiver) => {
                 if (Reflect.has(target, prop)) {
                     return Reflect.get(target, prop, receiver);
-                } else if (
-                    target.__jsosVarObj &&
-                    Reflect.has(target.__jsosVarObj, prop)
-                ) {
-                    return Reflect.get(target.__jsosVarObj, prop, receiver);
+                } else {
+                    const jsosVarObj = target.__jsosVarObj;
+                    if (jsosVarObj === null || jsosVarObj === undefined) {
+                        // Since Vals can wrap null, we have to gracefully
+                        // handle the case of attemted property accesses on
+                        // null.
+                        return jsosVarObj;
+                    }
+                    if (jsosVarObj !== Object(jsosVarObj)) {
+                        // If target.__jsosVarObj is a primitive, then it
+                        // doesn't have a prop so Reflect.get breaks since it
+                        // bypasses Javascript's automatic type boxing behavior
+                        // (e.g., treating a string primitive as a String).
+                        // Using this instead of Reflect.get() will
+                        // automatically box the primitive.
+                        return jsosVarObj[prop];
+                    }
+                    return Reflect.get(jsosVarObj, prop, receiver);
                 }
             },
             set: (target, prop, val, receiver) => {
@@ -2207,8 +2243,61 @@ export class Var {
         });
     }
 
-    get __jsosSha1(): string {
-        return this.__jsosVal.__jsosSha1;
+    set __jsosAutoPullUpdates(newVal: boolean) {
+        // when newVal === this.#__jsosAutoPullUpdates, this is a no-op.
+        if (newVal && !this.#__jsosAutoPullUpdates) {
+            this.#__jsosSubscriptionID = this.__jsosVarStore.subscribeToUpdates(
+                this.__jsosName,
+                this.__jsosNamespace,
+                async (
+                    name: string,
+                    namespace: string | null,
+                    oldSha1: string | null,
+                    newSha1: string
+                ): Promise<void> => {
+                    if (
+                        name !== this.__jsosName ||
+                        namespace !== this.__jsosNamespace
+                    ) {
+                        throw Error("Received an update for a different Var");
+                    }
+                    if (oldSha1 && oldSha1 !== this.__jsosSha1) {
+                        throw Error(
+                            "Received an out-of-order update from __jsosVarStore subscription to Var:\n" +
+                                `name=${name}, namespace=${namespace}.\n` +
+                                `Expected oldSha1=${this.__jsosSha1}, but got oldSha1=${oldSha1}.\n` +
+                                `VarStores are supposed to guarantee in-order delivery of updates to Vars.`
+                        );
+                    }
+                    this.__jsosParentVal = this.__jsosVal;
+                    await this.__private_jsosPointToNewVal(newSha1);
+                }
+            );
+        } else if (!newVal && this.#__jsosAutoPullUpdates) {
+            if (!this.#__jsosSubscriptionID) {
+                throw Error(
+                    "Var is not subscribed to updates but should be because subscription " +
+                    "is decided by the value(and getter / setter) of #__jsosAutoPullUpdates."
+                );
+            }
+            const unsubSuccess = this.__jsosVarStore.unsubscribeFromUpdates(
+                this.#__jsosSubscriptionID
+            );
+            if (!unsubSuccess) {
+                throw Error(
+                    "Failed to unsubscribe from VarStore updates for Var " +
+                    `name=${this.__jsosName}, namespace=${this.__jsosNamespace}, ` +
+                    "which happens via a setter for __autoPullUpdates whenever we " +
+                    "turn __autoPullUpdates to fals while this Var was subscribed."
+                )
+            }
+            this.#__jsosSubscriptionID = null;
+        }
+        this.#__jsosAutoPullUpdates = newVal;
+    }
+
+    get __jsosSubscriptionID(): string | null {
+        return this.#__jsosSubscriptionID;
     }
 
     async __jsosSet(newVal: any): Promise<boolean> {
@@ -2255,16 +2344,22 @@ export class Var {
         throw Error("Not implemented");
     }
 
-    __jsosEquals(other: Var) {
-        return (
-            this.__jsosName === other.__jsosName &&
-            this.__jsosNamespace === other.__jsosNamespace &&
-            this.__jsosVal.__jsosEquals(other.__jsosVal)
-        );
+    __jsosIsMutableVar(): true {
+        return true;
     }
 
-    __jsosIsVar(): true {
-        return true;
+    // Returns true if updates existed in this.__jsosVarStore and they were
+    // successfully pulled and underlying Val was updated; false otherwise.
+    async __jsosPull(): Promise<boolean> {
+        const mostRecentSha1 = await this.__jsosVarStore.getVar(
+            this.__jsosName,
+            this.__jsosNamespace
+        );
+        if (mostRecentSha1 && mostRecentSha1 !== this.__jsosSha1) {
+            this.__private_jsosPointToNewVal(mostRecentSha1);
+            return true;
+        }
+        return false;
     }
 }
 
@@ -2274,14 +2369,13 @@ export class Var {
 // the Var.  Throws error if the Var already exists in the VarStore.
 // If updateCallback is provided, it will be called any time the Var
 // is updated externally.
-export async function NewVar<T>(options: {
+export async function NewVar<T extends NotUndefined>(options: {
     name: string;
     namespace?: string;
     val: T;
     valStore?: ValStore;
     varStore?: VarStore;
     autoPullUpdates?: boolean;
-    callback?: VarUpdateCallback;
 }): Promise<VarWrapper<T>> {
     const {
         name,
@@ -2290,7 +2384,6 @@ export async function NewVar<T>(options: {
         valStore = DEFAULT_VALUE_STORE,
         varStore = DEFAULT_VARIABLE_STORE,
         autoPullUpdates = true,
-        callback,
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -2316,33 +2409,33 @@ export async function NewVar<T>(options: {
         forSureAVal,
         obj,
         varStore,
-        autoPullUpdates,
-        callback
+        autoPullUpdates
     ) as VarWrapper<T>;
 }
 
 // returns undefined if the Var does not exist in the VarStore.
-export async function GetVar(options: {
+export async function GetVar<T>(options: {
     name: string;
     namespace?: string;
     valStore?: ValStore;
     varStore?: VarStore;
     autoPullUpdates?: boolean;
-    callback?: VarUpdateCallback;
-}): Promise<any> {
+}): Promise<VarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
         valStore = DEFAULT_VALUE_STORE,
         varStore = DEFAULT_VARIABLE_STORE,
         autoPullUpdates = true,
-        callback,
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
     if (valSha1 === undefined) {
         return undefined;
     }
-    const val = await ValFromSha1({ sha1: valSha1, valStore });
+    const val = await GetVal({ sha1: valSha1, valStore });
+    if (!val) {
+        throw Error(`Val with sha1 ${valSha1} not found in ValStore`);
+    }
     const mutableObjCopy = await val.__jsosObjectCopy(false);
     return new Var(
         name,
@@ -2358,19 +2451,17 @@ export async function GetOrNewVar(options: {
     name: string;
     namespace?: string;
     defaultVal: any;
-    valStore?: ValStore;
     varStore?: VarStore;
+    valStore?: ValStore;
     autoPullUpdates?: boolean;
-    callback?: VarUpdateCallback;
 }) {
     const {
         name,
         namespace,
         defaultVal,
-        valStore = DEFAULT_VALUE_STORE,
         varStore = DEFAULT_VARIABLE_STORE,
+        valStore = DEFAULT_VALUE_STORE,
         autoPullUpdates = true,
-        callback,
     } = options;
     const gotVaR = await GetVar({
         name,
@@ -2378,7 +2469,6 @@ export async function GetOrNewVar(options: {
         valStore,
         varStore,
         autoPullUpdates,
-        callback,
     });
     if (gotVaR !== undefined) {
         return gotVaR;
@@ -2390,7 +2480,6 @@ export async function GetOrNewVar(options: {
         valStore,
         varStore,
         autoPullUpdates,
-        callback,
     });
 }
 
@@ -2405,4 +2494,125 @@ export async function DeleteVar(options: {
         varStore = DEFAULT_VARIABLE_STORE,
     } = options;
     return await varStore.deleteVar(name, namespace);
+}
+
+export function SubscribeToVar(options: {
+    name: string;
+    namespace?: string;
+    callback: VarUpdateCallback;
+    varStore?: VarStore;
+    valStore?: ValStore;
+}): string {
+    const {
+        name,
+        namespace = null,
+        callback,
+        varStore = DEFAULT_VARIABLE_STORE,
+        valStore = DEFAULT_VALUE_STORE,
+    } = options;
+    return varStore.subscribeToUpdates(
+        name,
+        namespace,
+        async (name, namespace, oldSha1, newSha1) => {
+            const val = await GetVal({ sha1: newSha1, valStore });
+            if (!val) {
+                throw Error(`Val with sha1 ${newSha1} not found in ValStore`);
+            }
+            const mutableObjCopy = await val.__jsosObjectCopy(false);
+            const newVar = new Var(
+                name,
+                namespace,
+                val,
+                mutableObjCopy,
+                varStore,
+                false
+            ) as any;
+            callback(newVar);
+        }
+    );
+}
+
+export function UnsubscribeFromUpdates (
+    subscriptionID: string,
+    varStore?: VarStore
+): boolean {
+    const varStoreToUse = varStore || DEFAULT_VARIABLE_STORE;
+    return varStoreToUse.unsubscribeFromUpdates(subscriptionID);
+}
+
+class ImmutableVar extends VarBase {
+    // ImmutableVar is essentially an named Val. It is a snapshot of
+    // the mapping between
+    // Note that this does *not* make the var immutable in the VarStore,
+    // just immutable via this Var object.
+    // while true, causes local mutations to this var to fail, though remote
+    // changes can still be pulled in. This is a useful guard against accidental
+    // updates.
+    async __jsosSet(newVal: any): Promise<ImmutableVar> {
+        return this.__jsosUpdate((_) => newVal)
+    }
+
+    async __jsosSetIn(
+        indexArray: Array<string | number>,
+        newVal: any
+    ): Promise<void> {
+        throw Error("Not implemented");
+    }
+
+    // Returns this if update failed, else returns new Var object with updated
+    // Val.
+    async __jsosUpdate(
+        updateFn: AsyncValUpdateFn | SyncValUpdateFn
+    ): Promise<ImmutableVar> {
+        const oldVal = this.__jsosVal;
+        const newVal = await oldVal.__jsosUpdate(updateFn);
+        if (oldVal.__jsosSha1 !== newVal.__jsosSha1) {
+            const updateVarRes = await this.__jsosVarStore.updateVar(
+                this.__jsosName,
+                this.__jsosNamespace,
+                oldVal.__jsosSha1,
+                newVal.__jsosSha1
+            );
+            if (updateVarRes) {
+                return new ImmutableVar(
+                    this.__jsosName,
+                    this.__jsosNamespace,
+                    newVal,
+                    await newVal.__jsosObjectCopy(false),
+                    this.__jsosVarStore,
+                    this.__jsosVal
+                );
+            } else {
+                throw Error(
+                    `Failed to update var name=${this.__jsosName} namespace=${this.__jsosNamespace} in VarStore.`
+                );
+            }
+        }
+        return this;
+    }
+
+    async __jsosUpdateIn(
+        indexArray: Array<string | number>,
+        updateFn: (oldObject: any) => any
+    ): Promise<void> {
+        throw Error("Not implemented");
+    }
+
+    __jsosIsImmutableVar(): true {
+        return true;
+    }
+
+    // Returns true if updates existed in this.__jsosVarStore and they were
+    // successfully pulled and underlying Val was updated; false otherwise.
+    async __jsosPull(): Promise<boolean> {
+        const mostRecentSha1 = await this.__jsosVarStore.getVar(
+            this.__jsosName,
+            this.__jsosNamespace
+        );
+        if (mostRecentSha1 && mostRecentSha1 !== this.__jsosSha1) {
+            this.__private_jsosPointToNewVal(mostRecentSha1);
+            return true;
+        }
+        return false;
+    }
 }

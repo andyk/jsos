@@ -4,7 +4,7 @@ import {
     ValStore,
     InMemoryJsonStore,
     InMemoryVarStore,
-    VarUpdateCallback,
+    VarStoreSubCallback,
     NewVal,
     NewVar,
     GetVar,
@@ -30,6 +30,11 @@ test("Basic ObjectStore and ValStore operations.", async () => {
     const key = await js.putJson(orig);
     const gotJson = await js.getJson(key);
     expect(orig).toEqual(gotJson);
+
+    const nullKey = await js.putJson(null);
+    const nullJson = await js.getJson(nullKey);
+    expect(nullJson).toBe(null);
+
     const vs = new ValStore(js);
     const encoded = vs.encode(orig);
     const normalized = vs.normalize(encoded);
@@ -38,6 +43,7 @@ test("Basic ObjectStore and ValStore operations.", async () => {
     const putVal = await vs.putVal(orig);
     const gotVal = await vs.getVal(putVal[0]);
     expect(orig).toEqual(gotVal);
+
 });
 
 test("Test valuestore with immutable types", async () => {
@@ -91,7 +97,7 @@ test("VarStore basics", async () => {
         )
     ).toBe(false);
     expect(await varStore.getVar("name", "namespace")).toBe("newSha1");
-    const callBack: VarUpdateCallback = jest.fn(
+    const callBack: VarStoreSubCallback = jest.fn(
         (n, ns, oldSha1, newSha1) => {
             expect(n).toBe("name");
             expect(ns).toBe("namespace");
@@ -154,11 +160,15 @@ test("Val basics", async () => {
 }, 1000000);
 
 describe('Creates (& cleans up) VarStore state', () => {
-    beforeAll(async () => {
+    beforeEach(async () => {
       await DeleteVar({ name: "myNullTestVar" });
       await DeleteVar({ name: "myTestVar" });
       await DeleteVar({ name: "myTestVar2" });
     }, 1000000);
+
+    function sleep(ms: number) {
+        return new Promise((resolve) => setTimeout(resolve, ms));
+    }
 
     test("Var basics", async () => {
         const v0 = await NewVar({ name: "myNullTestVar", val: null})
@@ -168,7 +178,9 @@ describe('Creates (& cleans up) VarStore state', () => {
         //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
         const v2 = await GetVar({ name: "myTestVar" });
         expect(v2).toBeDefined();
-        expect(v1.__jsosEquals(v2)).toBe(true);
+        if (v2) { // typeguard
+            expect(v1.__jsosEquals(v2)).toBe(true);
+        }
         //expect(NewVar({ // test to be sure creating Var from existing Val works.
         //    name: "myTestVar",
         //    val: await NewVal({ object: [1, 2, 3] }),
@@ -189,13 +201,10 @@ describe('Creates (& cleans up) VarStore state', () => {
         v1[3] = 4;
         expect(v1[3]).toBe(4);
         expect(v1.length).toBe(4);
-        function sleep(ms: number) {
-            return new Promise((resolve) => setTimeout(resolve, ms));
-        }
         // i think Jest is mucking with filesystem flushing so that
         // the VarStore subscriptions aren't working as expected
         // when using FileSystemVarStore.
-        //await sleep(500); // With supabase, 500ms wasn't enough time.
+        await sleep(1000); // With supabase, 500ms wasn't enough time.
         //expect(v2.length).toBe(4);
         //const v4 = await GetOrNewVar({
         //    name: "appData",
@@ -203,4 +212,18 @@ describe('Creates (& cleans up) VarStore state', () => {
         //    defaultVal: null
         //});
     }, 10000000);
+
+    test("Var without autPullUpdates", async () => {
+        const w = await NewVar({ name: "myTestVar", val: [1, 2, 3] });
+        const otherW = await GetVar<typeof w>({ name: "myTestVar", autoPullUpdates: false });
+        w[0] = 100;
+        await sleep(500);
+        expect(otherW).toBeDefined();
+        if (otherW) { // Typeguard
+            expect(otherW[0]).toBe(1);
+            await otherW.__jsosPull();
+            await sleep(1000);
+            expect(otherW[0]).toBe(100);
+        }
+    });
 });
