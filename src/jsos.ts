@@ -120,7 +120,7 @@ const VARIABLE_PARENT_KEY = "~#jVP";
 type Primitive = string | number | boolean | null;
 // NotUndefind copied from https://github.com/puleos/object-hash#hashvalue-options
 // Not sure why the NotUndefined[] part is necessary and not covered by the object part.
-type NotUndefined = object | Primitive | NotUndefined[];
+export type NotUndefined = object | Primitive | NotUndefined[];
 type ValRef = `${typeof VALUE_REF_PREFIX}${string}`;
 type NormalizedJson = Primitive | { [key: string]: ValRef } | ValRef[];
 type Json = Primitive | { [key: string]: Json } | Json[];
@@ -2020,6 +2020,9 @@ type ValWrapper<T> = T extends null ? Val : T & Val;
 type VarWrapper<T> = T extends null
     ? Var
     : (T extends infer U & Val ? U : T) & Var;
+type ImmutableVarWrapper<T> = T extends null
+    ? ImmutableVar
+    : (T extends infer U & Val ? U : T) & ImmutableVar;
 
 export async function NewVal<T extends NotUndefined>(options: {
     object: T;
@@ -2192,7 +2195,6 @@ export class Var extends VarBase{
         );
         this.#__jsosAutoPullUpdates = autoPullUpdates;
         this.#__jsosSubscriptionID = null;
-        this.__jsosParentVal = parentVal;
 
         return new Proxy(this, {
             get: (target, prop, receiver) => {
@@ -2363,6 +2365,170 @@ export class Var extends VarBase{
     }
 }
 
+class ImmutableVar extends VarBase {
+    // ImmutableVar is essentially an named Val. It is a snapshot of
+    // the mapping between
+    // Note that this does *not* make the var immutable in the VarStore,
+    // just immutable via this Var object.
+    // while true, causes local mutations to this var to fail, though remote
+    // changes can still be pulled in. This is a useful guard against accidental
+    // updates.
+
+    constructor(
+        name: string,
+        namespace: string | null,
+        jsosVal: Val,
+        object: any,
+        varStore: VarStore,
+        parentVal?: Val
+    ) {
+        super(
+            name,
+            namespace,
+            jsosVal,
+            object,
+            varStore,
+            parentVal
+        );
+
+        return new Proxy(this, {
+            get: (target, prop, receiver) => {
+                if (Reflect.has(target, prop)) {
+                    return Reflect.get(target, prop, receiver);
+                } else {
+                    const jsosVarObj = target.__jsosVarObj;
+                    if (jsosVarObj === null || jsosVarObj === undefined) {
+                        // Since Vals can wrap null, we have to gracefully
+                        // handle the case of attemted property accesses on
+                        // null.
+                        return jsosVarObj;
+                    }
+                    if (jsosVarObj !== Object(jsosVarObj)) {
+                        // If target.__jsosVarObj is a primitive, then it
+                        // doesn't have a prop so Reflect.get breaks since it
+                        // bypasses Javascript's automatic type boxing behavior
+                        // (e.g., treating a string primitive as a String).
+                        // Using this instead of Reflect.get() will
+                        // automatically box the primitive.
+                        return jsosVarObj[prop];
+                    }
+                    return Reflect.get(jsosVarObj, prop, receiver);
+                }
+            },
+            set: (target, prop, val, receiver) => {
+                throw Error(
+                    "Cannot set properties on an ImmutableVar, use " +
+                    "update functions such as __jsosUpdate() instead."
+                );
+            },
+        });
+    }
+
+    async __jsosSet(newVal: any): Promise<ImmutableVar> {
+        return this.__jsosUpdate((_) => newVal)
+    }
+
+    async __jsosSetIn(
+        indexArray: Array<string | number>,
+        newVal: any
+    ): Promise<ImmutableVar> {
+        throw Error("Not implemented");
+    }
+
+    // Returns this if update failed, else returns new Var object with updated
+    // Val.
+    async __jsosUpdate(
+        updateFn: AsyncValUpdateFn | SyncValUpdateFn
+    ): Promise<this> {
+        const oldVal = this.__jsosVal;
+        const newVal = await oldVal.__jsosUpdate(updateFn);
+        if (oldVal.__jsosSha1 !== newVal.__jsosSha1) {
+            const updateVarRes = await this.__jsosVarStore.updateVar(
+                this.__jsosName,
+                this.__jsosNamespace,
+                oldVal.__jsosSha1,
+                newVal.__jsosSha1
+            );
+            if (updateVarRes) {
+                return new ImmutableVar(
+                    this.__jsosName,
+                    this.__jsosNamespace,
+                    newVal,
+                    await newVal.__jsosObjectCopy(false),
+                    this.__jsosVarStore,
+                    this.__jsosVal
+                ) as this;
+            } else {
+                throw Error(
+                    `Failed to update var name=${this.__jsosName} namespace=${this.__jsosNamespace} in VarStore.`
+                );
+            }
+        }
+        return this;
+    }
+
+    async __jsosUpdateIn(
+        indexArray: Array<string | number>,
+        updateFn: (oldObject: any) => any
+    ): Promise<ImmutableVar> {
+        throw Error("Not implemented");
+    }
+
+    __jsosIsImmutableVar(): true {
+        return true;
+    }
+
+    // Returns `this` if no updates existed in this.__jsosVarStore. Else
+    // pull the updates and return a new ImmutableVar object with the
+    // updated Val.
+    async __jsosPull(): Promise<ImmutableVar> {
+        const mostRecentSha1 = await this.__jsosVarStore.getVar(
+            this.__jsosName,
+            this.__jsosNamespace
+        );
+        if (mostRecentSha1 && mostRecentSha1 !== this.__jsosSha1) {
+            const gotVal = await GetVal({
+                sha1: mostRecentSha1,
+                valStore: this.__jsosVal.__jsosValStore,
+            });
+            if (!gotVal) {
+                throw Error(
+                    `Val with sha1 ${mostRecentSha1} not found in ValStore`
+                );
+            }
+            return new ImmutableVar(
+                this.__jsosName,
+                this.__jsosNamespace,
+                gotVal,
+                await this.__jsosVal.__jsosObjectCopy(false),
+                this.__jsosVarStore,
+                this.__jsosParentVal
+            );
+        }
+        return this;
+    }
+}
+
+function parseImmutableAutoPullUpdates(
+    immutableFlag: boolean | undefined,
+    autoPullUpdatesFlag: boolean | undefined
+): { immutable: boolean, autoPullUpdates: boolean } {
+    if (immutableFlag === undefined && autoPullUpdatesFlag === undefined) {
+        // if neither immutable nor autoPull updates are specified,
+        // default to mutable with autoPullUpdates.
+        return {immutable: false, autoPullUpdates: true};
+    } else if (immutableFlag === undefined && autoPullUpdatesFlag) {
+        return {immutable: !autoPullUpdatesFlag, autoPullUpdates: true};
+    } else if (autoPullUpdatesFlag === undefined && immutableFlag) {
+        return {immutable: true, autoPullUpdates: !immutableFlag};
+    } else {
+        throw Error(
+            "Cannot create an immutable Var that auto-pulls updates. " +
+            "Immutable Vars are not subscribed to updates."
+        );
+    }
+}
+
 // Create a new Var object.  If val is a `Val` object, then this
 // just directly uses its sha1.  Else this calls `Val.create(val)`
 // which creates a new Val in the ValStore and then uses its sha1 for
@@ -2383,7 +2549,7 @@ export async function NewVar<T extends NotUndefined>(options: {
         val,
         valStore = DEFAULT_VALUE_STORE,
         varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true,
+        autoPullUpdates = true
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -2413,7 +2579,56 @@ export async function NewVar<T extends NotUndefined>(options: {
     ) as VarWrapper<T>;
 }
 
+export async function NewImmutableVar<T extends NotUndefined>(options: {
+    name: string;
+    namespace?: string;
+    val: T;
+    valStore?: ValStore;
+    varStore?: VarStore;
+    autoPullUpdates?: boolean;
+}): Promise<ImmutableVarWrapper<T>> {
+    const {
+        name,
+        namespace = null,
+        val,
+        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VARIABLE_STORE,
+        autoPullUpdates = true
+    } = options;
+    let forSureAVal: Val;
+    if (val instanceof Val) {
+        forSureAVal = val;
+    } else {
+        forSureAVal = await NewVal({ object: val, valStore });
+    }
+    let obj: any = await forSureAVal.__jsosObjectCopy(false);
+    const newVarRes = await varStore.newVar(
+        name,
+        namespace,
+        forSureAVal.__jsosSha1
+    );
+    if (!newVarRes) {
+        if (await varStore.getVar(name, namespace)) {
+            throw Error(`Var ${name} already exists in VarStore`);
+        }
+        throw Error("Failed to create new var in VarStore");
+    }
+    return new ImmutableVar(
+        name,
+        namespace,
+        forSureAVal,
+        obj,
+        varStore) as any;
+}
+
 // returns undefined if the Var does not exist in the VarStore.
+// If immutable and autoPullUpdates - throw error
+// If immutable and not autoPullUpdates - returns an ImmutableVar object that
+// is not subscribed to updates and cannot be updated.
+// if !immutable and autoPullUpdates - returns a Var object that
+// is subscribed to updates (and can also be updated via __jsosPull()).
+// if !immutable and not autoPullUpdates - returns a Var object that
+// is not subscribed to updates but can be updated via __jsosPull().
 export async function GetVar<T>(options: {
     name: string;
     namespace?: string;
@@ -2426,7 +2641,7 @@ export async function GetVar<T>(options: {
         namespace = null,
         valStore = DEFAULT_VALUE_STORE,
         varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true,
+        autoPullUpdates = true
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
     if (valSha1 === undefined) {
@@ -2443,7 +2658,38 @@ export async function GetVar<T>(options: {
         val,
         mutableObjCopy,
         varStore,
-        autoPullUpdates
+        autoPullUpdates,
+    ) as any;
+}
+
+//TODO: get ParentVal from VarStore as well and set that
+export async function GetImmutableVar<T>(options: {
+    name: string;
+    namespace?: string;
+    valStore?: ValStore;
+    varStore?: VarStore;
+}): Promise<VarWrapper<T> | undefined> {
+    const {
+        name,
+        namespace = null,
+        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VARIABLE_STORE,
+    } = options;
+    const valSha1 = await varStore.getVar(name, namespace);
+    if (valSha1 === undefined) {
+        return undefined;
+    }
+    const val = await GetVal({ sha1: valSha1, valStore });
+    if (!val) {
+        throw Error(`Val with sha1 ${valSha1} not found in ValStore`);
+    }
+    const mutableObjCopy = await val.__jsosObjectCopy(false);
+    return new ImmutableVar(
+        name,
+        namespace,
+        val,
+        mutableObjCopy,
+        varStore,
     ) as any;
 }
 
@@ -2461,7 +2707,7 @@ export async function GetOrNewVar(options: {
         defaultVal,
         varStore = DEFAULT_VARIABLE_STORE,
         valStore = DEFAULT_VALUE_STORE,
-        autoPullUpdates = true,
+        autoPullUpdates,
     } = options;
     const gotVaR = await GetVar({
         name,
@@ -2480,6 +2726,38 @@ export async function GetOrNewVar(options: {
         valStore,
         varStore,
         autoPullUpdates,
+    });
+}
+
+export async function GetOrNewImmutableVar(options: {
+    name: string;
+    namespace?: string;
+    defaultVal: any;
+    varStore?: VarStore;
+    valStore?: ValStore;
+}) {
+    const {
+        name,
+        namespace,
+        defaultVal,
+        varStore = DEFAULT_VARIABLE_STORE,
+        valStore = DEFAULT_VALUE_STORE,
+    } = options;
+    const gotVaR = await GetImmutableVar({
+        name,
+        namespace,
+        valStore,
+        varStore,
+    });
+    if (gotVaR !== undefined) {
+        return gotVaR;
+    }
+    return await NewImmutableVar({
+        name,
+        namespace,
+        val: defaultVal,
+        valStore,
+        varStore,
     });
 }
 
@@ -2519,13 +2797,12 @@ export function SubscribeToVar(options: {
                 throw Error(`Val with sha1 ${newSha1} not found in ValStore`);
             }
             const mutableObjCopy = await val.__jsosObjectCopy(false);
-            const newVar = new Var(
+            const newVar = new ImmutableVar(
                 name,
                 namespace,
                 val,
                 mutableObjCopy,
-                varStore,
-                false
+                varStore
             ) as any;
             callback(newVar);
         }
@@ -2538,81 +2815,4 @@ export function UnsubscribeFromUpdates (
 ): boolean {
     const varStoreToUse = varStore || DEFAULT_VARIABLE_STORE;
     return varStoreToUse.unsubscribeFromUpdates(subscriptionID);
-}
-
-class ImmutableVar extends VarBase {
-    // ImmutableVar is essentially an named Val. It is a snapshot of
-    // the mapping between
-    // Note that this does *not* make the var immutable in the VarStore,
-    // just immutable via this Var object.
-    // while true, causes local mutations to this var to fail, though remote
-    // changes can still be pulled in. This is a useful guard against accidental
-    // updates.
-    async __jsosSet(newVal: any): Promise<ImmutableVar> {
-        return this.__jsosUpdate((_) => newVal)
-    }
-
-    async __jsosSetIn(
-        indexArray: Array<string | number>,
-        newVal: any
-    ): Promise<void> {
-        throw Error("Not implemented");
-    }
-
-    // Returns this if update failed, else returns new Var object with updated
-    // Val.
-    async __jsosUpdate(
-        updateFn: AsyncValUpdateFn | SyncValUpdateFn
-    ): Promise<ImmutableVar> {
-        const oldVal = this.__jsosVal;
-        const newVal = await oldVal.__jsosUpdate(updateFn);
-        if (oldVal.__jsosSha1 !== newVal.__jsosSha1) {
-            const updateVarRes = await this.__jsosVarStore.updateVar(
-                this.__jsosName,
-                this.__jsosNamespace,
-                oldVal.__jsosSha1,
-                newVal.__jsosSha1
-            );
-            if (updateVarRes) {
-                return new ImmutableVar(
-                    this.__jsosName,
-                    this.__jsosNamespace,
-                    newVal,
-                    await newVal.__jsosObjectCopy(false),
-                    this.__jsosVarStore,
-                    this.__jsosVal
-                );
-            } else {
-                throw Error(
-                    `Failed to update var name=${this.__jsosName} namespace=${this.__jsosNamespace} in VarStore.`
-                );
-            }
-        }
-        return this;
-    }
-
-    async __jsosUpdateIn(
-        indexArray: Array<string | number>,
-        updateFn: (oldObject: any) => any
-    ): Promise<void> {
-        throw Error("Not implemented");
-    }
-
-    __jsosIsImmutableVar(): true {
-        return true;
-    }
-
-    // Returns true if updates existed in this.__jsosVarStore and they were
-    // successfully pulled and underlying Val was updated; false otherwise.
-    async __jsosPull(): Promise<boolean> {
-        const mostRecentSha1 = await this.__jsosVarStore.getVar(
-            this.__jsosName,
-            this.__jsosNamespace
-        );
-        if (mostRecentSha1 && mostRecentSha1 !== this.__jsosSha1) {
-            this.__private_jsosPointToNewVal(mostRecentSha1);
-            return true;
-        }
-        return false;
-    }
 }

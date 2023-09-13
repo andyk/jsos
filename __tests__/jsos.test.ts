@@ -6,9 +6,9 @@ import {
     InMemoryVarStore,
     VarStoreSubCallback,
     NewVal,
+    NewImmutableVar,
     NewVar,
     GetVar,
-    GetOrNewVar,
     DeleteVar,
 } from "../src/jsos";
 import {
@@ -178,7 +178,7 @@ describe('Creates (& cleans up) VarStore state', () => {
         //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
         const v2 = await GetVar({ name: "myTestVar" });
         expect(v2).toBeDefined();
-        if (v2) { // typeguard
+        if (v2) {
             expect(v1.__jsosEquals(v2)).toBe(true);
         }
         //expect(NewVar({ // test to be sure creating Var from existing Val works.
@@ -225,5 +225,17 @@ describe('Creates (& cleans up) VarStore state', () => {
             await sleep(1000);
             expect(otherW[0]).toBe(100);
         }
+    });
+
+    test("ImmutableVar", async () => {
+        const immut = await NewImmutableVar({ name: "myTestVar", val: [1, 2, 3] });
+        expect("__jsosIsImmutableVar" in immut).toBe(true);
+        expect(() => {
+            immut[0] = 5;
+            console.log("immut var updated:" + immut[0]);
+        }).toThrow();
+        const newImmut = await immut.__jsosUpdate((oldVal: Array<number>) => [...oldVal, 4]);
+        expect(newImmut.length).toEqual(4);
+        expect(immut.length).toEqual(3);
     });
 });

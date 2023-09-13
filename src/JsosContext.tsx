@@ -1,6 +1,6 @@
 /*
-If you don't need or want to use global state, consider `useVar()` instead
-of `useVarContext()`.
+If you don't need or want to use global state via context providers, consider
+`useVar()` instead of `useVarContext()`.
 
 To use this component, wrap your app in a JsosContextProvider, like so:
 
@@ -10,7 +10,7 @@ To use this component, wrap your app in a JsosContextProvider, like so:
 
 Then inside any component:
 
-    const [myVar, setMyVar] = useDataContext();  // Behaves like useState()
+    const [myVar, setMyVar] = useVarContext();  // Behaves like useState()
 
 This is a React hook that behaves a lot like React's native useState().
 
@@ -23,20 +23,19 @@ To use supabase for both the ValStore and VarStore, use
 
     <JsosContextProvider name="myVar" supabaseAPIKey="YOUR_KEY_HERE">
 */
-import React, { useEffect, useContext} from "react";
-import { Val, GetOrNewVar } from "./jsos";
+import React, { useContext} from "react";
+import { NotUndefined } from "./jsos";
+import useVar from "./useVar";
 
-type ResolvedType<T> = T extends Promise<infer R> ? R : never;
-
-export const VarContext = React.createContext<Array<Val | Function | null>>(
+export const VarContext = React.createContext<Array<NotUndefined>>(
     []
 );
 
-export function useVarContext<S>(initialState: Val | (() => Val)): Array<Val | Function | null> {
+export function useVarContext(initialState: any): Array<any> {
   const context = useContext(VarContext);
 
   if (context === undefined) {
-    throw new Error("useVarContext must be used inside a DataProvider");
+    throw new Error("useVarContext must be used inside a JsosContextProvider");
   }
 
   return context;
@@ -51,53 +50,9 @@ export default function JsosContextProvider({
     name: string;
     namespace?: string;
 }) {
-    const [jsosVar, setJsosVar] = React.useState<null | ResolvedType<ReturnType<typeof GetOrNewVar>>>(null);
-    const [appData, setAppData] = React.useState<{ [key: string]: null | Val }>(
-        { pObject: null }
-    );
-
-    function varChanged(
-        name: string,
-        namespace: string | null,
-        newSha1: string | null,
-        oldSha1: string
-    ) {
-        console.log("varChanged triggered: ", oldSha1, newSha1);
-        setAppData({ pObject: jsosVar?.__jsosVal || null });
-    }
-
-    useEffect(() => {
-        (async () => {
-            let fetchedVar = await GetOrNewVar({
-                name,
-                namespace,
-                defaultVal: { games: {}},
-            });
-            setJsosVar(fetchedVar);
-            console.log("finished init setAppData to: ", fetchedVar);
-        })();
-    }, []);
-
-    useEffect(() => {
-        console.log("jsosVar changed: ", jsosVar);
-        (async () => {
-            let pObj = jsosVar?.__jsosVal || null;
-            console.log("jsosVar update triggered: setting pObj: ", pObj);
-            setAppData({ pObject: pObj });
-        })();
-    }, [jsosVar]);
-
-    async function updatePObject(updateFun: (oldObj: any) => any) {
-        console.log("in updatePObject, jsosVar is:", jsosVar);
-        if (jsosVar !== null) {
-            await jsosVar.__jsosUpdate(updateFun)
-            setAppData({ pObject: jsosVar?.__jsosVal || null });
-            console.log("successfully setAppData in updatePObject()");
-        }
-    }
-
+    const [appData, setAppData] = useVar(name, namespace);
     return (
-        <VarContext.Provider value={[appData.pObject, updatePObject]}>
+        <VarContext.Provider value={[appData.Var, setAppData]}>
             {children}
         </VarContext.Provider>
     );
