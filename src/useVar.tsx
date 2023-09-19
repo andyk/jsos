@@ -1,14 +1,15 @@
 import React, { useEffect }  from 'react';
 import { GetOrNewImmutableVar, SubscribeToVar, Var } from './jsos';
-import { has } from 'lodash';
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
 // By default, uses Browser's IndexedDB for ValStore and Browser's Local Storage
 // for VarStore.
-const useVar = (name: string, namespace?: string, defaultVal?: any) => {
+const useVar = (defaultVal?: any, options?: { name: string, namespace?: string } ) => {
     // we have to wrap our Var in something since React tests to see if state
     // has changed using Object.is.
+    let name = options?.name || "JsosDefaultVar";
+    let namespace = options?.namespace;
     const [jsosVar, setJsosVar] = React.useState<null | any>({ Var: { __jsosVarObj: defaultVal } });
 
     useEffect(() => {
@@ -25,7 +26,7 @@ const useVar = (name: string, namespace?: string, defaultVal?: any) => {
             name,
             namespace,
             callback: (newVar: Var) => {
-                console.log("handleNeVar: ", newVar);
+                console.log("handleNewVar: ", newVar);
                 setJsosVar((oldVal: any) => {
                     const updatedJsosVar = { Var: newVar };
                     console.log("setJsosVar(updatedJsosVar = ", updatedJsosVar, ")")
@@ -52,7 +53,7 @@ const useVar = (name: string, namespace?: string, defaultVal?: any) => {
         console.log("successfully updated var: ", name, namespace, jsosVar);
     }
 
-    return [jsosVar?.Var?.__jsosVarObj || JSON.stringify(jsosVar), updateVar];
+    return [jsosVar?.Var?.__jsosVarObj, updateVar];
 }
 
 export default useVar;

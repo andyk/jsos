@@ -23,15 +23,15 @@ To use supabase for both the ValStore and VarStore, use
 
     <JsosContextProvider name="myVar" supabaseAPIKey="YOUR_KEY_HERE">
 */
-import React, { useContext} from "react";
+import React, { createContext, useContext} from "react";
 import { NotUndefined } from "./jsos";
 import useVar from "./useVar";
 
-export const VarContext = React.createContext<Array<NotUndefined>>(
-    []
+const VarContext = createContext<[NotUndefined, Function] | undefined>(
+    undefined
 );
 
-export function useVarContext(initialState: any): Array<any> {
+export function useVarContext(): [NotUndefined, Function] {
   const context = useContext(VarContext);
 
   if (context === undefined) {
@@ -45,14 +45,16 @@ export default function JsosContextProvider({
     children,
     name,
     namespace,
+    defaultVal,
 }: {
     children: React.ReactNode;
     name: string;
     namespace?: string;
+    defaultVal?: any;
 }) {
-    const [appData, setAppData] = useVar(name, namespace);
+    const [appData, setAppData] = useVar(defaultVal, { name, namespace });
     return (
-        <VarContext.Provider value={[appData.Var, setAppData]}>
+        <VarContext.Provider value={[appData, setAppData]}>
             {children}
         </VarContext.Provider>
     );
