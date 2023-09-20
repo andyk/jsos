@@ -1739,6 +1739,7 @@ class SupabaseVarStore extends VarStore {
     supabaseClient: SupabaseClient;
     varsTableName: string;
     supabaseSubscription: RealtimeChannel | null;
+    uuid: string;
 
     constructor(
         supabaseClient: SupabaseClient,
@@ -1749,7 +1750,8 @@ class SupabaseVarStore extends VarStore {
         this.varsTableName = varsTableName;
         this.supabaseSubscription = null;
         this.subscribeToSupabase();
-        console.log("created supabase var store");
+        this.uuid = uuidv4();
+        console.log("created supabase var store ", this.uuid);
     }
 
     //get supabaseSubscription(): RealtimeChannel | null {
@@ -1798,7 +1800,9 @@ class SupabaseVarStore extends VarStore {
                             );
                         }
                         console.log(
-                            `SupabaseVarStore notifying ${this.varListeners.size} listeners of var update...`
+                            `SupabaseVarStore notifying ${this.varListeners.size} listeners of var update...\n`,
+                            this.uuid,
+                            this
                         );
                         this.notifyListeners(
                             payload.old["name"],
@@ -1965,7 +1969,7 @@ if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
 
 // Immutable builder pattern entry point to using Jsos loosely inspired by
 // Apache Spark's SparkSession.
-class JsosSession {
+export class JsosSession {
     #jsonStores: JsonStore[];
     #valStore: ValStore | null;
     #varStore: VarStore | null;
@@ -2073,6 +2077,7 @@ class JsosSession {
         namespace?: string;
         callback: VarUpdateCallback;
     }): string {
+        console.log("in jsossess subscribeToVar");
         return SubscribeToVar({
             ...options,
             valStore: this.valStore,

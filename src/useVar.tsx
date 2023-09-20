@@ -1,5 +1,5 @@
-import React, { useEffect } from "react";
-import jsos, { Var } from "./jsos";
+import React from "react";
+import jsos, { Var, JsosSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
@@ -18,14 +18,18 @@ const useVar = (
     // has changed using Object.is.
     let name = options?.name || "JsosDefaultVar";
     let namespace = options?.namespace;
-    let jsosSess = options?.supabaseClient
-        ? jsos.addSupabase(options.supabaseClient)
-        : jsos
+    let [jsosSess, setJsosSess] = React.useState<JsosSession>(jsos);
     const [jsosVar, setJsosVar] = React.useState<null | any>({
         Var: { __jsosVarObj: defaultVal },
     });
 
-    useEffect(() => {
+    React.useEffect(() => {
+        if (options?.supabaseClient) {
+            setJsosSess(jsos.addSupabase(options.supabaseClient))
+        }
+    }, []);
+
+    React.useEffect(() => {
         (async () => {
             let fetchedVar = await jsosSess.getOrNewImmutableVar({
                 name,
@@ -35,7 +39,7 @@ const useVar = (
             setJsosVar({ Var: fetchedVar });
             console.log("finished init setAppData to: ", fetchedVar);
         })();
-        jsosSess.subscribeToVar({
+        const subscrID = jsosSess.subscribeToVar({
             name,
             namespace,
             callback: (newVar: Var) => {
@@ -51,7 +55,12 @@ const useVar = (
                 });
             },
         });
-    }, []);
+        console.log("subscribed to var: ", subscrID);
+    }, [jsosSess]);
+
+    React.useEffect(() => {
+        console.log("jsosVar changed: ", jsosVar);
+    }, [jsosVar]);
 
     async function updateVar(updateValOrFn: any) {
         const v = jsosVar["Var"];
