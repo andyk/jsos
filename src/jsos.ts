@@ -17,7 +17,6 @@ import { v4 as uuidv4 } from "uuid";
 //import * as fs from "fs";
 //import path from "path";
 import hash from "object-hash";
-import supabase from "./supabase";
 import { Mutex } from "async-mutex";
 import _ from "lodash";
 // import { createStore, get, set, del } from "idb-keyval";
@@ -941,8 +940,17 @@ export abstract class VarStore {
     ): SubscriptionUUID {
         const uuid = uuidv4();
         const varKey = _toVarKey(name, namespace);
+        console.log(
+            "registering callback for varKey",
+            varKey,
+            " with subscriptionUUID ",
+            uuid,
+            " and callbackFn ",
+            callbackFn
+        );
         if (!this.varListeners.has(varKey)) {
             this.varListeners.set(varKey, new Map());
+            console.log("varListeners is now", this.varListeners);
         }
         this.varListeners.get(varKey)!.set(uuid, callbackFn);
         this.subscriptionIdToVarKey.set(uuid, varKey);
@@ -1364,7 +1372,9 @@ export class FileBackedVarStore extends VarStore {
         }
         this.subscriptionsFolderPath = subscriptionsFolderPath;
         if (!this.fs.existsSync(this.subscriptionsFolderPath)) {
-            this.fs.mkdirSync(this.subscriptionsFolderPath, { recursive: true });
+            this.fs.mkdirSync(this.subscriptionsFolderPath, {
+                recursive: true,
+            });
         }
         this.watchers = new Map();
         this.exitHook(() => {
@@ -1490,7 +1500,10 @@ export class FileBackedVarStore extends VarStore {
             const files = this.fs.readdirSync(varListenerFolder);
             for (let subscriptionFile of files) {
                 const filePath = varListenerFolder + "/" + subscriptionFile;
-                const listenerFileContents = this.fs.readFileSync(filePath, "utf8");
+                const listenerFileContents = this.fs.readFileSync(
+                    filePath,
+                    "utf8"
+                );
                 const listenerEvents = JSON.parse(listenerFileContents); // Array<[oldSha1: string, newSha1: string]>
                 listenerEvents.push([oldSha1, newSha1]);
                 const outStream = this.fs.createWriteStream(filePath, "utf8");
@@ -1525,7 +1538,10 @@ export class FileBackedVarStore extends VarStore {
                 return false;
             }
             varStore[varKey] = valSha1;
-            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            this.fs.writeFileSync(
+                this.varStoreFileName,
+                JSON.stringify(varStore)
+            );
             this.updateListenerFiles(null, valSha1, varKey);
             return true;
         } catch (error) {
@@ -1556,7 +1572,10 @@ export class FileBackedVarStore extends VarStore {
                 return false;
             }
             varStore[varKey] = newSha1;
-            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            this.fs.writeFileSync(
+                this.varStoreFileName,
+                JSON.stringify(varStore)
+            );
             this.updateListenerFiles(oldSha1, newSha1, varKey);
             return true;
         } catch (error) {
@@ -1604,7 +1623,10 @@ export class FileBackedVarStore extends VarStore {
                 return false;
             }
             delete varStore[key];
-            this.fs.writeFileSync(this.varStoreFileName, JSON.stringify(varStore));
+            this.fs.writeFileSync(
+                this.varStoreFileName,
+                JSON.stringify(varStore)
+            );
             return true;
         } catch (error) {
             console.error(
@@ -1727,6 +1749,7 @@ class SupabaseVarStore extends VarStore {
         this.varsTableName = varsTableName;
         this.supabaseSubscription = null;
         this.subscribeToSupabase();
+        console.log("created supabase var store");
     }
 
     //get supabaseSubscription(): RealtimeChannel | null {
@@ -1775,7 +1798,7 @@ class SupabaseVarStore extends VarStore {
                             );
                         }
                         console.log(
-                            "SupabaseVarStore Notifying listeners of var update..."
+                            `SupabaseVarStore notifying ${this.varListeners.size} listeners of var update...`
                         );
                         this.notifyListeners(
                             payload.old["name"],
@@ -1922,18 +1945,145 @@ class SupabaseVarStore extends VarStore {
     }
 }
 
-//const DEFAULT_VALUE_STORE = new ValStore(new InMemoryJsonStore());
-//const DEFAULT_VALUE_STORE = new ValStore(new SupabaseJsonStore(supabase));
-const DEFAULT_VALUE_STORE_LIST: Array<JsonStore> = [];
-DEFAULT_VALUE_STORE_LIST.push(new InMemoryJsonStore());
+const DEFAULT_VAL_STORE_LIST: Array<JsonStore> = [];
+DEFAULT_VAL_STORE_LIST.push(new InMemoryJsonStore());
 if (typeof window !== "undefined") {
-    DEFAULT_VALUE_STORE_LIST.push(new BrowserIndexedDBJsonStore());
+    DEFAULT_VAL_STORE_LIST.push(new BrowserIndexedDBJsonStore());
 } else {
-    DEFAULT_VALUE_STORE_LIST.push(new FileBackedJsonStore());
+    DEFAULT_VAL_STORE_LIST.push(new FileBackedJsonStore());
 }
-export let DEFAULT_VALUE_STORE = new ValStore(
-    new MultiJsonStore(DEFAULT_VALUE_STORE_LIST)
+const DEFAULT_VAL_STORE = new ValStore(
+    new MultiJsonStore(DEFAULT_VAL_STORE_LIST)
 );
+
+let DEFAULT_VAR_STORE: VarStore;
+if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+    DEFAULT_VAR_STORE = new BrowserLocalStorageVarStore();
+} else {
+    DEFAULT_VAR_STORE = new FileBackedVarStore();
+}
+
+// Immutable builder pattern entry point to using Jsos loosely inspired by
+// Apache Spark's SparkSession.
+class JsosSession {
+    #jsonStores: JsonStore[];
+    #valStore: ValStore | null;
+    #varStore: VarStore | null;
+
+    constructor(jsonStores?: JsonStore[], varStore?: VarStore | null) {
+        this.#jsonStores = jsonStores ?? [];
+        this.#valStore = null; // Initialized by Getter.
+        this.#varStore = varStore ?? null;
+    }
+
+    reset(): JsosSession {
+        return new JsosSession();
+    }
+
+    get varStore(): VarStore {
+        if (this.#varStore === null) {
+            throw Error("The varStore has not been set on this JsosSession");
+        }
+        return this.#varStore;
+    }
+
+    setVarStore(varStore: VarStore) {
+        return new JsosSession(this.#jsonStores, varStore);
+    }
+
+    get valStore(): ValStore {
+        if (this.#jsonStores.length === 0) {
+            throw Error("No jsonStores have been set on this JsosSession");
+        }
+        // else they are set, so (set if first time) and return the Valstore
+        if (this.#valStore === null) {
+            this.#valStore = new ValStore(new MultiJsonStore(this.#jsonStores));
+        }
+        return this.#valStore;
+    }
+
+    addJsonStore(jsonStore: JsonStore): JsosSession {
+        return new JsosSession([...this.#jsonStores, jsonStore], this.#varStore);
+    }
+
+    addInMemory(): JsosSession {
+        return this.addJsonStore(new InMemoryJsonStore());
+    }
+
+    addBrowserLocalStorage(
+        databaseName?: string,
+        storeName?: string
+    ): JsosSession {
+        return this
+            .addJsonStore(
+                new BrowserIndexedDBJsonStore(databaseName, storeName)
+            )
+            .setVarStore(new BrowserLocalStorageVarStore);
+    }
+
+    addFileSystemStorage(fileName?: string): JsosSession {
+        return this.addJsonStore(new FileBackedJsonStore(fileName));
+    }
+
+    addDefaultLocalStorage() {
+        if (
+            typeof window !== "undefined" &&
+            typeof localStorage !== "undefined"
+        ) {
+            return this.addBrowserLocalStorage();
+        } else {
+            return this.addFileSystemStorage();
+        }
+    }
+
+    addSupabase(supabaseClient: SupabaseClient): JsosSession {
+        return this
+            .addJsonStore(new SupabaseJsonStore(supabaseClient))
+            .setVarStore(new SupabaseVarStore(supabaseClient));
+    }
+
+    async getOrNewVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        defaultVal: any;
+        autoPullUpdates?: boolean;
+    }): Promise<VarWrapper<T>> {
+        return GetOrNewVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    async getOrNewImmutableVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        defaultVal: any;
+        autoPullUpdates?: boolean;
+    }): Promise<VarWrapper<T>> {
+        return GetOrNewImmutableVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    subscribeToVar(options: {
+        name: string;
+        namespace?: string;
+        callback: VarUpdateCallback;
+    }): string {
+        return SubscribeToVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+}
+
+// the default session.
+const jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
+export default jsos;
 
 export class Val {
     readonly __jsosValStore: ValStore;
@@ -2028,7 +2178,7 @@ export async function NewVal<T extends NotUndefined>(options: {
     object: T;
     valStore?: ValStore;
 }): Promise<ValWrapper<T>> {
-    const { object, valStore = DEFAULT_VALUE_STORE } = options;
+    const { object, valStore = DEFAULT_VAL_STORE } = options;
     const [sha1, __] = await valStore.putVal(object);
     const putVal = await valStore.getVal(sha1);
     return new Val(putVal, sha1, valStore) as ValWrapper<T>;
@@ -2041,23 +2191,12 @@ export async function GetVal(options: {
     sha1: string;
     valStore?: ValStore;
 }): Promise<Val | undefined> {
-    const { sha1, valStore = DEFAULT_VALUE_STORE } = options;
+    const { sha1, valStore = DEFAULT_VAL_STORE } = options;
     const obj = await valStore.getVal(sha1);
     if (obj === undefined) {
         return undefined;
     }
     return new Val(obj, sha1, valStore);
-}
-
-//export const DEFAULT_VARIABLE_STORE = new InMemoryVarStore();
-//export const DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
-//export const DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
-export let DEFAULT_VARIABLE_STORE: VarStore;
-if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
-    DEFAULT_VARIABLE_STORE = new BrowserLocalStorageVarStore();
-} else {
-    //DEFAULT_VARIABLE_STORE = new FileBackedVarStore();
-    DEFAULT_VARIABLE_STORE = new SupabaseVarStore(supabase);
 }
 
 class VarBase {
@@ -2090,16 +2229,18 @@ class VarBase {
     // Actually making this private via `#...` syntax breaks with how we use a
     // Proxy in our constructor. Might work but be uglier to use a symbol method
     // here.
-    protected async __private_jsosPointToNewVal(newSha1: string): Promise<void> {
+    protected async __private_jsosPointToNewVal(
+        newSha1: string
+    ): Promise<void> {
         const newVal = await GetVal({
             sha1: newSha1,
             valStore: this.__jsosVal.__jsosValStore,
         });
         if (!newVal) {
             throw Error(
-                `Cannot update Var name=${this.__jsosName}, ` +
-                `namespace = ${this.__jsosNamespace} to a Val ` +
-                `that does not exist in ValStore.`
+                `Ca/nnot update Var name=${this.__jsosName}, ` +
+                    `namespace = ${this.__jsosNamespace} to a Val ` +
+                    `that does not exist in ValStore.`
             );
         }
         this.__jsosVal = newVal;
@@ -2166,7 +2307,7 @@ class VarBase {
 // thow an error if the var has been changed in
 // __jsosVarStore since this var last pulled updates from it
 // either via subscribing to updates or via calling __jsosPull().
-export class Var extends VarBase{
+export class Var extends VarBase {
     /*
        A Var has a name, optionally a namespace, and the address (i.e., sha1) of a Val.
         A var can be updated to refer to a different Val. This is done via an atomic
@@ -2185,14 +2326,7 @@ export class Var extends VarBase{
         autoPullUpdates: boolean,
         parentVal?: Val
     ) {
-        super(
-            name,
-            namespace,
-            jsosVal,
-            object,
-            varStore,
-            parentVal
-        );
+        super(name, namespace, jsosVal, object, varStore, parentVal);
         this.#__jsosAutoPullUpdates = autoPullUpdates;
         this.#__jsosSubscriptionID = null;
 
@@ -2279,7 +2413,7 @@ export class Var extends VarBase{
             if (!this.#__jsosSubscriptionID) {
                 throw Error(
                     "Var is not subscribed to updates but should be because subscription " +
-                    "is decided by the value(and getter / setter) of #__jsosAutoPullUpdates."
+                        "is decided by the value(and getter / setter) of #__jsosAutoPullUpdates."
                 );
             }
             const unsubSuccess = this.__jsosVarStore.unsubscribeFromUpdates(
@@ -2288,10 +2422,10 @@ export class Var extends VarBase{
             if (!unsubSuccess) {
                 throw Error(
                     "Failed to unsubscribe from VarStore updates for Var " +
-                    `name=${this.__jsosName}, namespace=${this.__jsosNamespace}, ` +
-                    "which happens via a setter for __autoPullUpdates whenever we " +
-                    "turn __autoPullUpdates to fals while this Var was subscribed."
-                )
+                        `name=${this.__jsosName}, namespace=${this.__jsosNamespace}, ` +
+                        "which happens via a setter for __autoPullUpdates whenever we " +
+                        "turn __autoPullUpdates to fals while this Var was subscribed."
+                );
             }
             this.#__jsosSubscriptionID = null;
         }
@@ -2382,14 +2516,7 @@ class ImmutableVar extends VarBase {
         varStore: VarStore,
         parentVal?: Val
     ) {
-        super(
-            name,
-            namespace,
-            jsosVal,
-            object,
-            varStore,
-            parentVal
-        );
+        super(name, namespace, jsosVal, object, varStore, parentVal);
 
         return new Proxy(this, {
             get: (target, prop, receiver) => {
@@ -2418,14 +2545,14 @@ class ImmutableVar extends VarBase {
             set: (target, prop, val, receiver) => {
                 throw Error(
                     "Cannot set properties on an ImmutableVar, use " +
-                    "update functions such as __jsosUpdate() instead."
+                        "update functions such as __jsosUpdate() instead."
                 );
             },
         });
     }
 
     async __jsosSet(newVal: any): Promise<ImmutableVar> {
-        return this.__jsosUpdate((_) => newVal)
+        return this.__jsosUpdate((_) => newVal);
     }
 
     async __jsosSetIn(
@@ -2512,19 +2639,19 @@ class ImmutableVar extends VarBase {
 function parseImmutableAutoPullUpdates(
     immutableFlag: boolean | undefined,
     autoPullUpdatesFlag: boolean | undefined
-): { immutable: boolean, autoPullUpdates: boolean } {
+): { immutable: boolean; autoPullUpdates: boolean } {
     if (immutableFlag === undefined && autoPullUpdatesFlag === undefined) {
         // if neither immutable nor autoPull updates are specified,
         // default to mutable with autoPullUpdates.
-        return {immutable: false, autoPullUpdates: true};
+        return { immutable: false, autoPullUpdates: true };
     } else if (immutableFlag === undefined && autoPullUpdatesFlag) {
-        return {immutable: !autoPullUpdatesFlag, autoPullUpdates: true};
+        return { immutable: !autoPullUpdatesFlag, autoPullUpdates: true };
     } else if (autoPullUpdatesFlag === undefined && immutableFlag) {
-        return {immutable: true, autoPullUpdates: !immutableFlag};
+        return { immutable: true, autoPullUpdates: !immutableFlag };
     } else {
         throw Error(
             "Cannot create an immutable Var that auto-pulls updates. " +
-            "Immutable Vars are not subscribed to updates."
+                "Immutable Vars are not subscribed to updates."
         );
     }
 }
@@ -2547,9 +2674,9 @@ export async function NewVar<T extends NotUndefined>(options: {
         name,
         namespace = null,
         val,
-        valStore = DEFAULT_VALUE_STORE,
-        varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true
+        valStore = DEFAULT_VAL_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        autoPullUpdates = true,
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -2591,9 +2718,9 @@ export async function NewImmutableVar<T extends NotUndefined>(options: {
         name,
         namespace = null,
         val,
-        valStore = DEFAULT_VALUE_STORE,
-        varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true
+        valStore = DEFAULT_VAL_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        autoPullUpdates = true,
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -2613,12 +2740,7 @@ export async function NewImmutableVar<T extends NotUndefined>(options: {
         }
         throw Error("Failed to create new var in VarStore");
     }
-    return new ImmutableVar(
-        name,
-        namespace,
-        forSureAVal,
-        obj,
-        varStore) as any;
+    return new ImmutableVar(name, namespace, forSureAVal, obj, varStore) as any;
 }
 
 // returns undefined if the Var does not exist in the VarStore.
@@ -2639,9 +2761,9 @@ export async function GetVar<T>(options: {
     const {
         name,
         namespace = null,
-        valStore = DEFAULT_VALUE_STORE,
-        varStore = DEFAULT_VARIABLE_STORE,
-        autoPullUpdates = true
+        valStore = DEFAULT_VAL_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        autoPullUpdates = true,
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
     if (valSha1 === undefined) {
@@ -2658,7 +2780,7 @@ export async function GetVar<T>(options: {
         val,
         mutableObjCopy,
         varStore,
-        autoPullUpdates,
+        autoPullUpdates
     ) as any;
 }
 
@@ -2672,8 +2794,8 @@ export async function GetImmutableVar<T>(options: {
     const {
         name,
         namespace = null,
-        valStore = DEFAULT_VALUE_STORE,
-        varStore = DEFAULT_VARIABLE_STORE,
+        valStore = DEFAULT_VAL_STORE,
+        varStore = DEFAULT_VAR_STORE,
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
     if (valSha1 === undefined) {
@@ -2689,7 +2811,7 @@ export async function GetImmutableVar<T>(options: {
         namespace,
         val,
         mutableObjCopy,
-        varStore,
+        varStore
     ) as any;
 }
 
@@ -2705,8 +2827,8 @@ export async function GetOrNewVar(options: {
         name,
         namespace,
         defaultVal,
-        varStore = DEFAULT_VARIABLE_STORE,
-        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        valStore = DEFAULT_VAL_STORE,
         autoPullUpdates,
     } = options;
     const gotVaR = await GetVar({
@@ -2740,8 +2862,8 @@ export async function GetOrNewImmutableVar(options: {
         name,
         namespace,
         defaultVal,
-        varStore = DEFAULT_VARIABLE_STORE,
-        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        valStore = DEFAULT_VAL_STORE,
     } = options;
     const gotVaR = await GetImmutableVar({
         name,
@@ -2766,11 +2888,7 @@ export async function DeleteVar(options: {
     namespace?: string;
     varStore?: VarStore;
 }): Promise<boolean> {
-    const {
-        name,
-        namespace = null,
-        varStore = DEFAULT_VARIABLE_STORE,
-    } = options;
+    const { name, namespace = null, varStore = DEFAULT_VAR_STORE } = options;
     return await varStore.deleteVar(name, namespace);
 }
 
@@ -2785,8 +2903,8 @@ export function SubscribeToVar(options: {
         name,
         namespace = null,
         callback,
-        varStore = DEFAULT_VARIABLE_STORE,
-        valStore = DEFAULT_VALUE_STORE,
+        varStore = DEFAULT_VAR_STORE,
+        valStore = DEFAULT_VAL_STORE,
     } = options;
     return varStore.subscribeToUpdates(
         name,
@@ -2809,10 +2927,10 @@ export function SubscribeToVar(options: {
     );
 }
 
-export function UnsubscribeFromUpdates (
+export function UnsubscribeFromUpdates(
     subscriptionID: string,
     varStore?: VarStore
 ): boolean {
-    const varStoreToUse = varStore || DEFAULT_VARIABLE_STORE;
+    const varStoreToUse = varStore || DEFAULT_VAR_STORE;
     return varStoreToUse.unsubscribeFromUpdates(subscriptionID);
 }
