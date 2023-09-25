@@ -1,6 +1,7 @@
 import React from "react";
 import jsos, { Var, JsosSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
+import { updateLanguageServiceSourceFile } from "typescript";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
@@ -76,7 +77,6 @@ const useVar = (
         } else {
             setJsosVar({ Var: await v.__jsosUpdate(() => updateValOrFn) });
         }
-        console.log("successfully updated var: ", name, namespace, jsosVar);
     }
 
     return [jsosVar?.Var?.__jsosVarObj, updateVar];

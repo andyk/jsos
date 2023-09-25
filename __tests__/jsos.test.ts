@@ -1,6 +1,7 @@
 import { jest } from "@jest/globals";
 import _ from "lodash";
-import {
+import jsos, {
+    JsosSession,
     ValStore,
     InMemoryJsonStore,
     InMemoryVarStore,
@@ -46,7 +47,7 @@ test("Basic ObjectStore and ValStore operations.", async () => {
 
 });
 
-test("Test valuestore with immutable types", async () => {
+test("ValStore with immutable types", async () => {
     const om = [
         new Date(),
         OrderedMap([
@@ -63,7 +64,7 @@ test("Test valuestore with immutable types", async () => {
     expect(om).toEqual(gotVal);
 });
 
-test("encodeNormalized and decodeNormalized.", async () => {
+test("encodeNormalized and decodeNormalized are inverses.", async () => {
     const js = new InMemoryJsonStore();
     const vs = new ValStore(js);
     const encodedNorm = await vs.encodeNormalized(["key1", "key2"]);
@@ -159,24 +160,49 @@ test("Val basics", async () => {
     expect(newBool.__jsosValObject).toBe(false);
 }, 1000000);
 
-describe('Creates (& cleans up) VarStore state', () => {
+test("Val created from an object that has a simple function", async () => {
+    const val = await NewVal({
+        object: {
+            a: 1,
+            b: 2,
+            c: function() {
+                return this.a + this.b;
+            },
+        },
+    });
+    expect(val.a).toBe(1);
+    expect(val.b).toBe(2);
+    expect(val.c()).toBe(3);
+    const updated = await val.__jsosUpdate((oldVal: any) => {
+        return { ...oldVal, a: 4 };
+    });
+    expect(updated.a).toBe(4);
+    expect(updated.b).toBe(2);
+    expect(updated.c()).toBe(6);
+    expect(val.a).toBe(1);
+    expect(val.b).toBe(2);
+    expect(val.c()).toBe(3);
+}, 1000000);
+
+describe('Creates (& cleans up) VarStore state against Supabase', () => {
+    const jsos = new JsosSession().addInMemory().addSupabaseFromEnv();
     beforeEach(async () => {
-      await DeleteVar({ name: "myNullTestVar" });
-      await DeleteVar({ name: "myTestVar" });
-      await DeleteVar({ name: "myTestVar2" });
+      await jsos.deleteVar({ name: "myNullTestVar" });
+      await jsos.deleteVar({ name: "myTestVar" });
+      await jsos.deleteVar({ name: "myTestVar2" });
     }, 1000000);
 
     function sleep(ms: number) {
         return new Promise((resolve) => setTimeout(resolve, ms));
     }
 
-    test("Var basics", async () => {
-        const v0 = await NewVar({ name: "myNullTestVar", val: null})
+    test("Var basics against Supabase", async () => {
+        const v0 = await jsos.newVar({ name: "myNullTestVar", val: null})
         expect(v0.__jsosVarObj).toBe(null);
         expect(v0).toBeDefined();
-        const v1 = await NewVar({ name: "myTestVar", val: [1, 2, 3] });
+        const v1 = await jsos.newVar({ name: "myTestVar", val: [1, 2, 3] });
         //const v2: any = await GetVar("myVar", null, undefined, undefined, false);
-        const v2 = await GetVar({ name: "myTestVar" });
+        const v2 = await jsos.getVar({ name: "myTestVar" });
         expect(v2).toBeDefined();
         if (v2) {
             expect(v1.__jsosEquals(v2)).toBe(true);
@@ -185,7 +211,7 @@ describe('Creates (& cleans up) VarStore state', () => {
         //    name: "myTestVar",
         //    val: await NewVal({ object: [1, 2, 3] }),
         //})).rejects.toThrow();
-        const v3 = await NewVar({
+        const v3 = await jsos.newVar({
             name: "myTestVar2",
             val: await NewVal({ object: [1, 2, 3] })
         });
@@ -213,9 +239,9 @@ describe('Creates (& cleans up) VarStore state', () => {
         //});
     }, 10000000);
 
-    test("Var without autPullUpdates", async () => {
-        const w = await NewVar({ name: "myTestVar", val: [1, 2, 3] });
-        const otherW = await GetVar<typeof w>({ name: "myTestVar", autoPullUpdates: false });
+    test("Var without autoPullUpdates against Supabase", async () => {
+        const w = await jsos.newVar({ name: "myTestVar", val: [1, 2, 3] });
+        const otherW = await jsos.getVar<typeof w>({ name: "myTestVar", autoPullUpdates: false });
         w[0] = 100;
         await sleep(500);
         expect(otherW).toBeDefined();
@@ -227,8 +253,8 @@ describe('Creates (& cleans up) VarStore state', () => {
         }
     });
 
-    test("ImmutableVar", async () => {
-        const immut = await NewImmutableVar({ name: "myTestVar", val: [1, 2, 3] });
+    test("ImmutableVar against Supabase", async () => {
+        const immut = await jsos.newImmutableVar({ name: "myTestVar", val: [1, 2, 3] });
         expect("__jsosIsImmutableVar" in immut).toBe(true);
         expect(() => {
             immut[0] = 5;
@@ -238,4 +264,15 @@ describe('Creates (& cleans up) VarStore state', () => {
         expect(newImmut.length).toEqual(4);
         expect(immut.length).toEqual(3);
     });
+});
+
+test("parameter chain stored with vals", async () => {
+    const parent = { a: 1, plusA: function (x: number): number {return x + this.a;} };
+    expect(parent.plusA(2)).toBe(3);
+    const child: { a?: number, b: number, aPlusB: () => number } & typeof parent = Object.create(parent);
+    child.b = 2
+    child.aPlusB = function (): number { return this.a + this.b }
+    expect(child.plusA(3)).toBe(4);
+    expect(child.aPlusB()).toBe(3);
+
 });

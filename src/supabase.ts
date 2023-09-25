@@ -2,7 +2,35 @@ import { createClient } from "@supabase/supabase-js";
 
 type CreateClientType = typeof createClient;
 
-const createSupaClient: CreateClientType = (
+//export type Json =
+//  | string
+//  | number
+//  | boolean
+//  | null
+//  | { [key: string]: Json }
+//  | Json[]
+//
+//interface JsosDatabase { 
+//    public: {
+//        Tables: {
+//            jsos_objects: {
+//                Row: {
+//                    hash: string,
+//                    json: Json
+//                }
+//            },
+//            jsos_vars: {
+//                Row: {
+//                    name: string,
+//                    namespace: string,
+//                    val_hash: string,
+//                }
+//            }
+//        }
+//    }
+//}
+
+export const createSupaClient: CreateClientType = (
     supabaseUrl,
     supabaseKey,
     options?
@@ -43,4 +71,18 @@ const createSupaClient: CreateClientType = (
     );
 }
 
-export default createSupaClient;
+export const supaClientFromEnv = () => {
+    const supabaseEnvKey = process.env.SUPABASE_JSOS_SERVICE_ROLE_KEY;
+    const supabaseProjectUrl = process.env.SUPABASE_JSOS_PROJECT_URL;
+    if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
+        throw Error(
+            `SUPABASE_JSOS_SERVICE_ROLE_KEY=${supabaseEnvKey}, ` +
+            `SUPABASE_JSOS_PROJECT_URL=${supabaseProjectUrl}; but ` +
+            "both must be defined in environment."
+        );
+    }
+    return createClient(
+        supabaseProjectUrl,
+        supabaseEnvKey
+    );
+}

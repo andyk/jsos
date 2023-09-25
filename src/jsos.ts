@@ -3,6 +3,7 @@ import {
     RealtimeChannel,
     RealtimePostgresUpdatePayload,
 } from "@supabase/supabase-js";
+import { supaClientFromEnv } from "./supabase";
 import {
     Collection,
     List,
@@ -108,6 +109,7 @@ const ORDERED_MAP_KEY = "~#iOM";
 const ORDERED_IMMUTABLE_SET_KEY = "~#iOS";
 const STACK_KEY = "~#iStk";
 const RECORD_KEY = "~#iR";
+const FUNCTION_KEY = "~#jF"
 const DATE_KEY = "~#jD";
 const REGEXP_KEY = "~#jR";
 
@@ -600,6 +602,9 @@ export class ValStore {
     // or https://github.com/ungap/structured-clone for encoding/decoding
     // Date, Boolean, etc. and handling objects w/ circular references.
     private shallowEncode(object: NotUndefined): any {
+        if (typeof object === 'function') {
+            return [FUNCTION_KEY, object.toString()];
+        }
         if (object instanceof Date) {
             return [DATE_KEY, object.toISOString()];
         }
@@ -665,6 +670,9 @@ export class ValStore {
     }
 
     private shallowDecode(object: any): any {
+        if (object?.[0] === FUNCTION_KEY) {
+            return new Function('return ' + object[1])();
+        }
         if (object?.[0] === DATE_KEY) {
             return new Date(object[1]);
         }
@@ -1974,10 +1982,15 @@ export class JsosSession {
     #valStore: ValStore | null;
     #varStore: VarStore | null;
 
-    constructor(jsonStores?: JsonStore[], varStore?: VarStore | null) {
-        this.#jsonStores = jsonStores ?? [];
+    constructor(
+        options?: {
+            jsonStores?: JsonStore[],
+            varStore?: VarStore | null
+        }
+    ) {
+        this.#jsonStores = options?.jsonStores || [];
         this.#valStore = null; // Initialized by Getter.
-        this.#varStore = varStore ?? null;
+        this.#varStore = options?.varStore || null;
     }
 
     reset(): JsosSession {
@@ -1992,7 +2005,7 @@ export class JsosSession {
     }
 
     setVarStore(varStore: VarStore) {
-        return new JsosSession(this.#jsonStores, varStore);
+        return new JsosSession({ jsonStores: this.#jsonStores, varStore });
     }
 
     get valStore(): ValStore {
@@ -2007,26 +2020,42 @@ export class JsosSession {
     }
 
     addJsonStore(jsonStore: JsonStore): JsosSession {
-        return new JsosSession([...this.#jsonStores, jsonStore], this.#varStore);
+        return new JsosSession(
+            {
+                jsonStores: [...this.#jsonStores, jsonStore],
+                varStore: this.#varStore
+            }
+        );
     }
 
     addInMemory(): JsosSession {
-        return this.addJsonStore(new InMemoryJsonStore());
+        return this.addJsonStore(new InMemoryJsonStore()).setVarStore(
+            new InMemoryVarStore()
+        );
     }
 
     addBrowserLocalStorage(
-        databaseName?: string,
-        storeName?: string
+        options?: {
+            databaseName?: string,
+            storeName?: string
+        }
     ): JsosSession {
-        return this
-            .addJsonStore(
-                new BrowserIndexedDBJsonStore(databaseName, storeName)
+        return this.addJsonStore(
+            new BrowserIndexedDBJsonStore(
+                options?.databaseName, options?.storeName
             )
-            .setVarStore(new BrowserLocalStorageVarStore);
+        ).setVarStore(new BrowserLocalStorageVarStore());
     }
 
-    addFileSystemStorage(fileName?: string): JsosSession {
-        return this.addJsonStore(new FileBackedJsonStore(fileName));
+    addFileSystemStorage(
+        options?: {
+            jsonStoreFileName?: string,
+            varStoreFileName?: string
+        }
+    ): JsosSession {
+        return this.addJsonStore(
+            new FileBackedJsonStore(options?.jsonStoreFileName)
+        ).setVarStore(new FileBackedVarStore(options?.varStoreFileName));
     }
 
     addDefaultLocalStorage() {
@@ -2041,17 +2070,56 @@ export class JsosSession {
     }
 
     addSupabase(supabaseClient: SupabaseClient): JsosSession {
-        return this
-            .addJsonStore(new SupabaseJsonStore(supabaseClient))
-            .setVarStore(new SupabaseVarStore(supabaseClient));
+        return this.addJsonStore(
+            new SupabaseJsonStore(supabaseClient)
+        ).setVarStore(new SupabaseVarStore(supabaseClient));
     }
 
-    async getOrNewVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        defaultVal: any;
-        autoPullUpdates?: boolean;
-    }): Promise<VarWrapper<T>> {
+    addSupabaseFromEnv(): JsosSession {
+        const supabaseClient = supaClientFromEnv();
+        return this.addJsonStore(
+            new SupabaseJsonStore(supabaseClient)
+        ).setVarStore(new SupabaseVarStore(supabaseClient));
+    }
+
+    async newVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            val: T;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<VarWrapper<T>> {
+        return NewVar<T>({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    async newImmutableVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            val: T;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<ImmutableVarWrapper<T>> {
+        return NewImmutableVar<T>({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    async getOrNewVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            defaultVal: any;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<VarWrapper<T>> {
         return GetOrNewVar({
             ...options,
             valStore: this.valStore,
@@ -2072,6 +2140,18 @@ export class JsosSession {
         });
     }
 
+    async getVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        autoPullUpdates?: boolean;
+    }): Promise<VarWrapper<T> | undefined> {
+        return GetVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
     subscribeToVar(options: {
         name: string;
         namespace?: string;
@@ -2084,7 +2164,22 @@ export class JsosSession {
             varStore: this.varStore,
         });
     }
+
+    deleteVar(
+        options: {
+            name: string;
+            namespace?: string;
+        }
+    ): Promise<boolean> {
+        return DeleteVar(
+                {
+                ...options,
+                varStore: this.varStore,
+            }
+        );
+    }
 }
+
 
 // the default session.
 const jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
@@ -2134,7 +2229,7 @@ export class Val {
     // object is immutable (i.e. deeply frozen).
     async __jsosUpdate(
         updateFn: AsyncValUpdateFn | SyncValUpdateFn
-    ): Promise<Val> {
+    ): Promise<this> {
         let newValObj = updateFn(await this.__jsosObjectCopy(false));
         if (newValObj instanceof Promise) {
             newValObj = await newValObj;
@@ -2148,7 +2243,7 @@ export class Val {
     async __jsosUpdateIn(
         indexArray: Array<string | number>,
         updateFn: (oldObject: any) => any
-    ): Promise<Val> {
+    ): Promise<this> {
         throw Error("Not implemented");
     }
 
@@ -2448,7 +2543,7 @@ export class Var extends VarBase {
     async __jsosSetIn(
         indexArray: Array<string | number>,
         newVal: any
-    ): Promise<void> {
+    ): Promise<boolean> {
         throw Error("Not implemented");
     }
 
@@ -2556,14 +2651,14 @@ class ImmutableVar extends VarBase {
         });
     }
 
-    async __jsosSet(newVal: any): Promise<ImmutableVar> {
+    async __jsosSet(newVal: any): Promise<this> {
         return this.__jsosUpdate((_) => newVal);
     }
 
     async __jsosSetIn(
         indexArray: Array<string | number>,
         newVal: any
-    ): Promise<ImmutableVar> {
+    ): Promise<this> {
         throw Error("Not implemented");
     }
 
@@ -2602,7 +2697,7 @@ class ImmutableVar extends VarBase {
     async __jsosUpdateIn(
         indexArray: Array<string | number>,
         updateFn: (oldObject: any) => any
-    ): Promise<ImmutableVar> {
+    ): Promise<this> {
         throw Error("Not implemented");
     }
 
@@ -2613,7 +2708,7 @@ class ImmutableVar extends VarBase {
     // Returns `this` if no updates existed in this.__jsosVarStore. Else
     // pull the updates and return a new ImmutableVar object with the
     // updated Val.
-    async __jsosPull(): Promise<ImmutableVar> {
+    async __jsosPull(): Promise<this> {
         const mostRecentSha1 = await this.__jsosVarStore.getVar(
             this.__jsosName,
             this.__jsosNamespace
@@ -2635,29 +2730,9 @@ class ImmutableVar extends VarBase {
                 await this.__jsosVal.__jsosObjectCopy(false),
                 this.__jsosVarStore,
                 this.__jsosParentVal
-            );
+            ) as this;
         }
         return this;
-    }
-}
-
-function parseImmutableAutoPullUpdates(
-    immutableFlag: boolean | undefined,
-    autoPullUpdatesFlag: boolean | undefined
-): { immutable: boolean; autoPullUpdates: boolean } {
-    if (immutableFlag === undefined && autoPullUpdatesFlag === undefined) {
-        // if neither immutable nor autoPull updates are specified,
-        // default to mutable with autoPullUpdates.
-        return { immutable: false, autoPullUpdates: true };
-    } else if (immutableFlag === undefined && autoPullUpdatesFlag) {
-        return { immutable: !autoPullUpdatesFlag, autoPullUpdates: true };
-    } else if (autoPullUpdatesFlag === undefined && immutableFlag) {
-        return { immutable: true, autoPullUpdates: !immutableFlag };
-    } else {
-        throw Error(
-            "Cannot create an immutable Var that auto-pulls updates. " +
-                "Immutable Vars are not subscribed to updates."
-        );
     }
 }
 
