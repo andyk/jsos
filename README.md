@@ -1,4 +1,4 @@
-# JSOS-JS
+# JSOS (Javascript Object Store)
 ## Transparent Object Persistence for JavaScript
 
 This is a Javascript/Typescript client for JSOS (JavaScript Object Store), which is a language agnostic framework for transparent object persistence and sharing.
