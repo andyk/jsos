@@ -264,15 +264,35 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         expect(newImmut.length).toEqual(4);
         expect(immut.length).toEqual(3);
     });
-});
 
-test("parameter chain stored with vals", async () => {
-    const parent = { a: 1, plusA: function (x: number): number {return x + this.a;} };
-    expect(parent.plusA(2)).toBe(3);
-    const child: { a?: number, b: number, aPlusB: () => number } & typeof parent = Object.create(parent);
-    child.b = 2
-    child.aPlusB = function (): number { return this.a + this.b }
-    expect(child.plusA(3)).toBe(4);
-    expect(child.aPlusB()).toBe(3);
-
+    test("parameter chain stored with vals", async () => {
+        const parent = { a: 1, plusA: function (x: number): number {return x + this.a;} };
+        expect(parent.plusA(2)).toBe(3);
+        const child: { a?: number, b: number, aPlusB: () => number } & typeof parent = Object.create(parent);
+        child.b = 2
+        child.aPlusB = function (): number { return this.a + this.b }
+        expect(child.plusA(3)).toBe(4);
+        expect(child.aPlusB()).toBe(3);
+        const v = await jsos.newVar({ name: "myTestVar", val: child });
+        expect(v.aPlusB()).toBe(3);
+        const v2 = await jsos.getVar<typeof v>({ name: "myTestVar" });
+        expect(v2?.aPlusB()).toBe(3);
+        // TODO: Add support for:
+        //     - non-enumerable properties
+        //     - classes
+        //     - contructor information
+        //     - getters & setters
+        // ... possibly via a new encoder type.
+        // 
+        //class Inner {
+        //    constructor(public a: number) {}
+        //    plusA(x: number): number { return x + this.a }
+        //}
+        //class Outer extends Inner {
+        //    constructor(a: number, public b: number) { super(a) }
+        //    aPlusB(): number { return this.a + this.b }
+        //}
+        //const v3 = await jsos.newVar({ name: "myTestVar2", val: new Outer(10, 20) })
+        //expect(v3?.aPlusB()).toBe(30);
+    });
 });

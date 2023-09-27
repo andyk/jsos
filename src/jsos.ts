@@ -109,7 +109,7 @@ const ORDERED_MAP_KEY = "~#iOM";
 const ORDERED_IMMUTABLE_SET_KEY = "~#iOS";
 const STACK_KEY = "~#iStk";
 const RECORD_KEY = "~#iR";
-const FUNCTION_KEY = "~#jF"
+const FUNCTION_KEY = "~#jF";
 const DATE_KEY = "~#jD";
 const REGEXP_KEY = "~#jR";
 
@@ -557,8 +557,23 @@ export class ValStore {
             visited.set(object, encoded);
         }
         if (encoded !== null && typeof encoded === "object") {
-            for (let k in encoded) {
+            for (let k of Object.keys(encoded)) {
                 encoded[k] = this.recursiveEncode(encoded[k], visited);
+            }
+            let proto = Object.getPrototypeOf(encoded);
+            if (
+                proto !== Object.prototype &&
+                proto !== Array.prototype &&
+                proto !== Function.prototype &&
+                proto !== String.prototype &&
+                proto !== Number.prototype &&
+                proto !== Boolean.prototype &&
+                proto !== RegExp.prototype &&
+                proto !== Set.prototype &&
+                proto !== Map.prototype &&
+                proto !== null
+            ) {
+                encoded["__proto__"] = this.recursiveEncode(proto, visited);
             }
         }
         return encoded;
@@ -602,7 +617,7 @@ export class ValStore {
     // or https://github.com/ungap/structured-clone for encoding/decoding
     // Date, Boolean, etc. and handling objects w/ circular references.
     private shallowEncode(object: NotUndefined): any {
-        if (typeof object === 'function') {
+        if (typeof object === "function") {
             return [FUNCTION_KEY, object.toString()];
         }
         if (object instanceof Date) {
@@ -654,11 +669,17 @@ export class ValStore {
             throw "Immutable.Record serialization not yet supported.";
             //return [RECORD_KEY, object.toObject()];
         }
-        if (Array.isArray(object)) {
+        if (Array.isArray(object) && object !== Array.prototype) {
+            // make a shallow copy of instances of Array, but not of
+            // Array.prototype.
             return [...object];
         }
         if (object && typeof object === "object") {
-            return { ...object };
+            // return a shallow copy of the object that has the same protype chain as object.
+            return Object.create(
+                Object.getPrototypeOf(object),
+                Object.getOwnPropertyDescriptors(object)
+            );
         }
         if (!isPrimitive(object)) {
             throw Error(
@@ -671,7 +692,7 @@ export class ValStore {
 
     private shallowDecode(object: any): any {
         if (object?.[0] === FUNCTION_KEY) {
-            return new Function('return ' + object[1])();
+            return new Function("return " + object[1])();
         }
         if (object?.[0] === DATE_KEY) {
             return new Date(object[1]);
@@ -1982,12 +2003,10 @@ export class JsosSession {
     #valStore: ValStore | null;
     #varStore: VarStore | null;
 
-    constructor(
-        options?: {
-            jsonStores?: JsonStore[],
-            varStore?: VarStore | null
-        }
-    ) {
+    constructor(options?: {
+        jsonStores?: JsonStore[];
+        varStore?: VarStore | null;
+    }) {
         this.#jsonStores = options?.jsonStores || [];
         this.#valStore = null; // Initialized by Getter.
         this.#varStore = options?.varStore || null;
@@ -2020,12 +2039,10 @@ export class JsosSession {
     }
 
     addJsonStore(jsonStore: JsonStore): JsosSession {
-        return new JsosSession(
-            {
-                jsonStores: [...this.#jsonStores, jsonStore],
-                varStore: this.#varStore
-            }
-        );
+        return new JsosSession({
+            jsonStores: [...this.#jsonStores, jsonStore],
+            varStore: this.#varStore,
+        });
     }
 
     addInMemory(): JsosSession {
@@ -2034,25 +2051,22 @@ export class JsosSession {
         );
     }
 
-    addBrowserLocalStorage(
-        options?: {
-            databaseName?: string,
-            storeName?: string
-        }
-    ): JsosSession {
+    addBrowserLocalStorage(options?: {
+        databaseName?: string;
+        storeName?: string;
+    }): JsosSession {
         return this.addJsonStore(
             new BrowserIndexedDBJsonStore(
-                options?.databaseName, options?.storeName
+                options?.databaseName,
+                options?.storeName
             )
         ).setVarStore(new BrowserLocalStorageVarStore());
     }
 
-    addFileSystemStorage(
-        options?: {
-            jsonStoreFileName?: string,
-            varStoreFileName?: string
-        }
-    ): JsosSession {
+    addFileSystemStorage(options?: {
+        jsonStoreFileName?: string;
+        varStoreFileName?: string;
+    }): JsosSession {
         return this.addJsonStore(
             new FileBackedJsonStore(options?.jsonStoreFileName)
         ).setVarStore(new FileBackedVarStore(options?.varStoreFileName));
@@ -2082,14 +2096,12 @@ export class JsosSession {
         ).setVarStore(new SupabaseVarStore(supabaseClient));
     }
 
-    async newVar<T extends NotUndefined>(
-        options: {
-            name: string;
-            namespace?: string;
-            val: T;
-            autoPullUpdates?: boolean;
-        }
-    ): Promise<VarWrapper<T>> {
+    async newVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        val: T;
+        autoPullUpdates?: boolean;
+    }): Promise<VarWrapper<T>> {
         return NewVar<T>({
             ...options,
             valStore: this.valStore,
@@ -2097,14 +2109,12 @@ export class JsosSession {
         });
     }
 
-    async newImmutableVar<T extends NotUndefined>(
-        options: {
-            name: string;
-            namespace?: string;
-            val: T;
-            autoPullUpdates?: boolean;
-        }
-    ): Promise<ImmutableVarWrapper<T>> {
+    async newImmutableVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        val: T;
+        autoPullUpdates?: boolean;
+    }): Promise<ImmutableVarWrapper<T>> {
         return NewImmutableVar<T>({
             ...options,
             valStore: this.valStore,
@@ -2112,14 +2122,12 @@ export class JsosSession {
         });
     }
 
-    async getOrNewVar<T extends NotUndefined>(
-        options: {
-            name: string;
-            namespace?: string;
-            defaultVal: any;
-            autoPullUpdates?: boolean;
-        }
-    ): Promise<VarWrapper<T>> {
+    async getOrNewVar<T extends NotUndefined>(options: {
+        name: string;
+        namespace?: string;
+        defaultVal: any;
+        autoPullUpdates?: boolean;
+    }): Promise<VarWrapper<T>> {
         return GetOrNewVar({
             ...options,
             valStore: this.valStore,
@@ -2165,21 +2173,13 @@ export class JsosSession {
         });
     }
 
-    deleteVar(
-        options: {
-            name: string;
-            namespace?: string;
-        }
-    ): Promise<boolean> {
-        return DeleteVar(
-                {
-                ...options,
-                varStore: this.varStore,
-            }
-        );
+    deleteVar(options: { name: string; namespace?: string }): Promise<boolean> {
+        return DeleteVar({
+            ...options,
+            varStore: this.varStore,
+        });
     }
 }
-
 
 // the default session.
 const jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
