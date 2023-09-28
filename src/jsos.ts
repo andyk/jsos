@@ -192,6 +192,22 @@ function isCustomStorageEvent(
     );
 }
 
+const builtInPrototypes = [
+    Object.prototype,
+    Array.prototype,
+    Function.prototype,
+    String.prototype,
+    Number.prototype,
+    Boolean.prototype,
+    RegExp.prototype,
+    Set.prototype,
+    Map.prototype,
+]
+
+function isBuiltInType(obj: any): boolean {
+    return builtInPrototypes.includes(Object.getPrototypeOf(obj));
+}
+
 // TODO: cache sha1's in memory using object identity as key
 export function getSha1(o: NotUndefined): string {
     return hash(o, { algorithm: "sha1", encoding: "hex" });
@@ -557,8 +573,23 @@ export class ValStore {
             visited.set(object, encoded);
         }
         if (encoded !== null && typeof encoded === "object") {
-            for (let k of Object.keys(encoded)) {
+            // iterate over encoded's own enumerable & non-enumerable properties
+            for (let k of Object.getOwnPropertyNames(encoded)) {
+                const propDescriptor = Object.getOwnPropertyDescriptor(encoded, k)
+                let tempResetPropK = false;
+                if (propDescriptor && !isBuiltInType(encoded) &&
+                    (!propDescriptor.enumerable || !propDescriptor.writable)
+                ) {
+                    Object.defineProperty(encoded, k, {
+                        writable: true,
+                        configurable: true,
+                    });
+                    tempResetPropK = true;
+                }
                 encoded[k] = this.recursiveEncode(encoded[k], visited);
+                if (tempResetPropK && propDescriptor) {
+                    Object.defineProperty(encoded, k, propDescriptor);
+                }
             }
             let proto = Object.getPrototypeOf(encoded);
             if (
@@ -573,7 +604,8 @@ export class ValStore {
                 proto !== Map.prototype &&
                 proto !== null
             ) {
-                encoded["__proto__"] = this.recursiveEncode(proto, visited);
+                //encoded["__proto__"] = this.recursiveEncode(proto, visited);
+                Object.setPrototypeOf(encoded, this.recursiveEncode(proto, visited));
             }
         }
         return encoded;

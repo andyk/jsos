@@ -265,18 +265,42 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         expect(immut.length).toEqual(3);
     });
 
-    test("parameter chain stored with vals", async () => {
-        const parent = { a: 1, plusA: function (x: number): number {return x + this.a;} };
+    test("POJO prototype chain stored with vals", async () => {
+        interface ParentType {
+            a: number,
+            plusA: (x: number) => number,
+            parentNonEnum?: string
+        }
+        const parent: ParentType = {
+            a: 1,
+            plusA: function (x: number): number { return x + this.a; }
+        };
         expect(parent.plusA(2)).toBe(3);
-        const child: { a?: number, b: number, aPlusB: () => number } & typeof parent = Object.create(parent);
+        interface ChildType extends ParentType {
+            b: number,
+            aPlusB: () => number,
+            childNonEnum?: string
+        }
+        const child: ChildType = Object.create(parent);
         child.b = 2
         child.aPlusB = function (): number { return this.a + this.b }
         expect(child.plusA(3)).toBe(4);
         expect(child.aPlusB()).toBe(3);
+        Object.defineProperty(parent, "parentNonEnum", {
+            value: "parentNonEnum", enumerable: false, writable: false
+        }); 
+        Object.defineProperty(child, "childNonEnum", { value: "childNonEnum", enumerable: false }); 
+        expect(child["parentNonEnum"]).toBe("parentNonEnum");
+        expect(child["childNonEnum"]).toBe("childNonEnum");
         const v = await jsos.newVar({ name: "myTestVar", val: child });
         expect(v.aPlusB()).toBe(3);
+        expect(v["parentNonEnum"]).toBe("parentNonEnum");
+        expect(v["childNonEnum"]).toBe("childNonEnum");
         const v2 = await jsos.getVar<typeof v>({ name: "myTestVar" });
         expect(v2?.aPlusB()).toBe(3);
+        expect(v2?.["parentNonEnum"]).toBe("parentNonEnum");
+        expect(v2?.["childNonEnum"]).toBe("childNonEnum");
+        expect(Object.getOwnPropertyDescriptor(v2, "childNonEnum")?.enumerable).toBe(false);
         // TODO: Add support for:
         //     - non-enumerable properties
         //     - classes
@@ -284,15 +308,18 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         //     - getters & setters
         // ... possibly via a new encoder type.
         // 
-        //class Inner {
-        //    constructor(public a: number) {}
-        //    plusA(x: number): number { return x + this.a }
-        //}
-        //class Outer extends Inner {
-        //    constructor(a: number, public b: number) { super(a) }
-        //    aPlusB(): number { return this.a + this.b }
-        //}
-        //const v3 = await jsos.newVar({ name: "myTestVar2", val: new Outer(10, 20) })
-        //expect(v3?.aPlusB()).toBe(30);
-    });
+});
+
+    test("var created from classes with inheritance", async () => {
+        class Parent {
+            constructor(public a: number) {}
+            plusA(x: number): number { return x + this.a }
+        }
+        class Child extends Parent {
+            constructor(a: number, public b: number) { super(a) }
+            aPlusB(): number { return this.a + this.b }
+        }
+        const v3 = await jsos.newVar({ name: "myTestVar2", val: new Child(10, 20) })
+        expect(v3?.aPlusB()).toBe(30);
+    }, 10000000);
 });
