@@ -117,6 +117,8 @@ const BUILTIN_MAP_KEY = "~#bM";
 const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
+const OBJECT_WITH_PROTOTYPE_KEY = "~#jOWP";
+const OBJECT_PROPERTY_DESCR_KEY = "~#jOPD";
 
 type Primitive = string | number | boolean | null;
 // NotUndefind copied from https://github.com/puleos/object-hash#hashvalue-options
@@ -140,6 +142,53 @@ type SyncValUpdateFn = (old: any) => any;
 type AsyncValUpdateFn = (old: any) => Promise<any>;
 type VarKey = string;
 type SubscriptionUUID = string;
+type PropertyDescriptorListItem = [
+    boolean | null, // configurable
+    boolean | null, // enumerable
+    any | null, // value
+    boolean | null, // writable
+    (() => any) | null, // get?(): any;
+    ((v: any) => void) | null // set?(v: any): void;
+];
+type PropertyDescriptorList = [string, PropertyDescriptorListItem][];
+
+function toPropertyDescriptorList(obj: any): PropertyDescriptorList {
+    const descr = Object.getOwnPropertyDescriptors(obj)
+    const propList = Object.entries(descr)
+    return propList.map(([k, v]) => [
+        k, [
+            v.configurable ?? null,
+            v.enumerable ?? null,
+            v.value ?? null,
+            v.writable ?? null,
+            v.get ?? null,
+            v.set ?? null
+        ]
+    ])
+}
+
+function fromPropertyDescriptorList(propDescrList: PropertyDescriptorList): PropertyDescriptorMap {
+    return propDescrList.reduce((acc, [propKey, propertyDescr]) => {
+        const descriptor: {
+            configurable?: boolean;
+            enumerable?: boolean;
+            value?: any;
+            writable?: boolean;
+            get?: (() => any);
+            set?: ((v: any) => void);
+        } = {};
+        if (propertyDescr[0] !== null) descriptor.configurable = propertyDescr[0];
+        if (propertyDescr[1] !== null) descriptor.enumerable = propertyDescr[1];
+        if (propertyDescr[2] !== null) descriptor.value = propertyDescr[2];
+        if (propertyDescr[3] !== null) descriptor.writable = propertyDescr[3];
+        if (propertyDescr[4] !== null) descriptor.get = propertyDescr[4];
+        if (propertyDescr[5] !== null) descriptor.set = propertyDescr[5];
+        
+        acc[propKey] = descriptor;
+                
+        return acc;
+    }, {} as PropertyDescriptorMap);
+}
 
 function isNotEmptyObject(obj: any): obj is Record<string, any> {
     return Object.keys(obj).length !== 0;
@@ -574,38 +623,9 @@ export class ValStore {
         }
         if (encoded !== null && typeof encoded === "object") {
             // iterate over encoded's own enumerable & non-enumerable properties
-            for (let k of Object.getOwnPropertyNames(encoded)) {
-                const propDescriptor = Object.getOwnPropertyDescriptor(encoded, k)
-                let tempResetPropK = false;
-                if (propDescriptor && !isBuiltInType(encoded) &&
-                    (!propDescriptor.enumerable || !propDescriptor.writable)
-                ) {
-                    Object.defineProperty(encoded, k, {
-                        writable: true,
-                        configurable: true,
-                    });
-                    tempResetPropK = true;
-                }
+            for (let k of Object.keys(encoded)) {
+                console.log("recursiveEncode: ", k, " = ", encoded[k]);
                 encoded[k] = this.recursiveEncode(encoded[k], visited);
-                if (tempResetPropK && propDescriptor) {
-                    Object.defineProperty(encoded, k, propDescriptor);
-                }
-            }
-            let proto = Object.getPrototypeOf(encoded);
-            if (
-                proto !== Object.prototype &&
-                proto !== Array.prototype &&
-                proto !== Function.prototype &&
-                proto !== String.prototype &&
-                proto !== Number.prototype &&
-                proto !== Boolean.prototype &&
-                proto !== RegExp.prototype &&
-                proto !== Set.prototype &&
-                proto !== Map.prototype &&
-                proto !== null
-            ) {
-                //encoded["__proto__"] = this.recursiveEncode(proto, visited);
-                Object.setPrototypeOf(encoded, this.recursiveEncode(proto, visited));
             }
         }
         return encoded;
@@ -658,10 +678,7 @@ export class ValStore {
         if (object instanceof RegExp) {
             return [
                 REGEXP_KEY,
-                {
-                    source: object.source,
-                    flags: object.flags,
-                },
+                [object.source, object.flags],
             ];
         }
         if (object instanceof Map) {
@@ -707,16 +724,45 @@ export class ValStore {
             return [...object];
         }
         if (object && typeof object === "object") {
-            // return a shallow copy of the object that has the same protype chain as object.
-            return Object.create(
-                Object.getPrototypeOf(object),
-                Object.getOwnPropertyDescriptors(object)
-            );
+            // Encode and return the object's own properties. If the object has a non-builtin prototype,
+            // then encode the prototype so that it will be normalized like any other property.
+            // we turn:
+            // {inner: {a: 1, b: 2}, c: 3}
+            // INTO
+            // [ // encoded object property descr
+            //   OBJECT_PROPERTY_DESCR_KEY,
+            //   [ // propertyTupleList
+            //     [ // first property
+            //       inner,
+            //       [
+            //         {a: 1, b: 2}, // value
+            //         true, // writable
+            //         true, // enumerable
+            //         true // configurable
+            //       ]
+            //     ], [ // second property
+            //       c,
+            //       [
+            //         3, // value
+            //         true, // writable
+            //         true, // enumerable
+            //         true // configurable
+            //       ]
+            //     ]
+            //   ]
+            // ]
+            const encodeDescriptors = [OBJECT_PROPERTY_DESCR_KEY, toPropertyDescriptorList(object)];
+            let proto = Object.getPrototypeOf(object);
+            if (!isBuiltInType(object) && proto !== null) {
+                return [OBJECT_WITH_PROTOTYPE_KEY, [encodeDescriptors, proto]];
+            }
+            return encodeDescriptors;
         }
         if (!isPrimitive(object)) {
             throw Error(
                 "shallowEncode can only handle things with typeof " +
-                    "string, number, boolean, null, Date, RegExp, or object (including array)"
+                "string, number, boolean, null, Date, RegExp, " +
+                "or object(including array), received: " + object
             );
         }
         return object;
@@ -730,7 +776,7 @@ export class ValStore {
             return new Date(object[1]);
         }
         if (object?.[0] === REGEXP_KEY) {
-            return new RegExp(object[1].source, object[1].flags);
+            return new RegExp(object[1][0], object[1][1]);
         }
         if (Array.isArray(object)) {
             if (object?.[0] === BUILTIN_MAP_KEY) {
@@ -761,6 +807,13 @@ export class ValStore {
             //    throw "Immutable.Record deserialization not yet supported.";
             //    return Record(object[1]);
             //}
+            if (object?.[0] === OBJECT_WITH_PROTOTYPE_KEY) {
+                const [obj, proto] = object[1];
+                return Object.create(proto, Object.getOwnPropertyDescriptors(obj));
+            }
+            if (object?.[0] === OBJECT_PROPERTY_DESCR_KEY) {
+                return Object.create(Object.prototype, fromPropertyDescriptorList(object[1]));
+            }
             return [...object];
         }
         if (object && typeof object === "object") {
@@ -813,15 +866,12 @@ export class ValStore {
             } else {
                 normalizedJson = {};
             }
-            for (let k in object) {
-                //if (typeof (object as any)[k] === "object") {
+            for (let k of Object.keys(object)) {
                 (normalizedJson as any)[k] = _toValRef(
                     this.recursiveNormalize((object as any)[k], objAccumulator)
                 );
-                //} else {
-                //    (normalizedJson as any)[k] = (object as any)[k];
-                //}
             }
+            
         }
         objAccumulator.push(normalizedJson);
         return normalizedJson;
