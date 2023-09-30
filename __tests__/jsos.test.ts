@@ -1,16 +1,12 @@
 import { jest } from "@jest/globals";
 import _ from "lodash";
-import jsos, {
+import {
     JsosSession,
     ValStore,
     InMemoryJsonStore,
     InMemoryVarStore,
     VarStoreSubCallback,
     NewVal,
-    NewImmutableVar,
-    NewVar,
-    GetVar,
-    DeleteVar,
 } from "../src/jsos";
 import {
     OrderedMap,
@@ -248,7 +244,7 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         if (otherW) { // Typeguard
             expect(otherW[0]).toBe(1);
             await otherW.__jsosPull();
-            await sleep(1500);
+            await sleep(1700);
             expect(otherW[0]).toBe(100);
         }
     });
@@ -312,14 +308,42 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
 
     test("var created from classes with inheritance", async () => {
         class Parent {
-            constructor(public a: number) {}
+            a: number
+            constructor(a: number) {this.a = a}
             plusA(x: number): number { return x + this.a }
         }
         class Child extends Parent {
             constructor(a: number, public b: number) { super(a) }
             aPlusB(): number { return this.a + this.b }
         }
-        const v3 = await jsos.newVar({ name: "myTestVar2", val: new Child(10, 20) })
-        expect(v3?.aPlusB()).toBe(30);
+        const v = await jsos.newVar({ name: "myTestVar", val: new Parent(1000) })
+        expect(v?.plusA(1)).toBe(1001);
+
+        // TODO: handle inheritance by declaring all ancestor classes
+        // as part of the constructor for a given class that we are
+        // deserializing. E.g., right now, when we deserialize a
+        // class constructor function Child, it looks like this:
+        // 
+        // "class Child extends Parent {
+        //     constructor(a: number, public b: number) { super(a) }
+        //     aPlusB(): number { return this.a + this.b }
+        // }"
+        //
+        // but it should look like this (i.e. all of the ancestor
+        // declarations should be prepeneded in the constructor:
+        //
+        // "class Parent {
+        //     a: number
+        //     constructor(a: number) {this.a = a}
+        //     plusA(x: number): number { return x + this.a }
+        // }
+        // class Child extends Parent {
+        //     constructor(a: number, public b: number) { super(a) }
+        //     aPlusB(): number { return this.a + this.b }
+        // }"
+        //  
+        const v2 = await jsos.newVar({ name: "myTestVar2", val: new Child(100, 200) })
+        expect(v2?.plusA(1)).toBe(101);
+        expect(v2?.aPlusB()).toBe(300);
     }, 10000000);
 });

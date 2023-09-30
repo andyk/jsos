@@ -117,8 +117,8 @@ const BUILTIN_MAP_KEY = "~#bM";
 const BUILTIN_SET_KEY = "~#bS";
 const NORMALIZED_OBJECT_KEY = "~#jN";
 const VARIABLE_PARENT_KEY = "~#jVP";
-const OBJECT_WITH_PROTOTYPE_KEY = "~#jOWP";
-const OBJECT_PROPERTY_DESCR_KEY = "~#jOPD";
+const OBJECT_WITH_PROTOTYPE_KEY = "~#jObjectWithPrototype";
+const OBJECT_PROPERTY_DESCR_KEY = "~#jObjectPropDescr";
 
 type Primitive = string | number | boolean | null;
 // NotUndefind copied from https://github.com/puleos/object-hash#hashvalue-options
@@ -624,7 +624,6 @@ export class ValStore {
         if (encoded !== null && typeof encoded === "object") {
             // iterate over encoded's own enumerable & non-enumerable properties
             for (let k of Object.keys(encoded)) {
-                console.log("recursiveEncode: ", k, " = ", encoded[k]);
                 encoded[k] = this.recursiveEncode(encoded[k], visited);
             }
         }
@@ -670,6 +669,11 @@ export class ValStore {
     // Date, Boolean, etc. and handling objects w/ circular references.
     private shallowEncode(object: NotUndefined): any {
         if (typeof object === "function") {
+            //const esprima = require('esprima');
+            //console.log("about to parse function object: ", object.toString());
+            //const ast = esprima.parseScript(object.toString());
+            //console.log("ast: ", ast);
+            //return [object.toString(), object.name]];
             return [FUNCTION_KEY, object.toString()];
         }
         if (object instanceof Date) {
@@ -770,7 +774,16 @@ export class ValStore {
 
     private shallowDecode(object: any): any {
         if (object?.[0] === FUNCTION_KEY) {
-            return new Function("return " + object[1])();
+            const fnSourceCode = object[1]
+            // handle class method style functions: "foo() { ... }"
+            const match = fnSourceCode.match(/^([a-zA-Z_]\w*)\s*\(([^)]*)\)\s*{\s*([\s\S]*)\s*}$/);
+            if (match) {
+                const methodName = match[1];
+                const args = match[2];
+                const funcBody = match[3];
+                return new Function(args, funcBody);
+            }
+            return new Function("return " + fnSourceCode)();
         }
         if (object?.[0] === DATE_KEY) {
             return new Date(object[1]);
@@ -1051,17 +1064,16 @@ export abstract class VarStore {
     ): SubscriptionUUID {
         const uuid = uuidv4();
         const varKey = _toVarKey(name, namespace);
-        console.log(
-            "registering callback for varKey",
-            varKey,
-            " with subscriptionUUID ",
-            uuid,
-            " and callbackFn ",
-            callbackFn
-        );
+        //console.log(
+        //    "registering callback for varKey",
+        //    varKey,
+        //    " with subscriptionUUID ",
+        //    uuid,
+        //    " and callbackFn ",
+        //    callbackFn
+        //);
         if (!this.varListeners.has(varKey)) {
             this.varListeners.set(varKey, new Map());
-            console.log("varListeners is now", this.varListeners);
         }
         this.varListeners.get(varKey)!.set(uuid, callbackFn);
         this.subscriptionIdToVarKey.set(uuid, varKey);
@@ -1795,9 +1807,9 @@ class SupabaseJsonStore extends JsonStore {
             .maybeSingle();
         if (error) {
             if (error.code === "23505") {
-                console.log(
-                    `object with sha1 ${sha1} already exists in database.`
-                );
+                //console.log(
+                //    `object with sha1 ${sha1} already exists in database.`
+                //);
                 const { data: row, error } = await this.supabaseClient
                     .from(this.objectsTableName)
                     .select("json")
@@ -1862,7 +1874,6 @@ class SupabaseVarStore extends VarStore {
         this.supabaseSubscription = null;
         this.subscribeToSupabase();
         this.uuid = uuidv4();
-        console.log("created supabase var store ", this.uuid);
     }
 
     //get supabaseSubscription(): RealtimeChannel | null {
@@ -1910,11 +1921,11 @@ class SupabaseVarStore extends VarStore {
                                     )}`
                             );
                         }
-                        console.log(
-                            `SupabaseVarStore notifying ${this.varListeners.size} listeners of var update...\n`,
-                            this.uuid,
-                            this
-                        );
+                        //console.log(
+                        //    `SupabaseVarStore notifying ${this.varListeners.size} listeners of var update...\n`,
+                        //    this.uuid,
+                        //    this
+                        //);
                         this.notifyListeners(
                             payload.old["name"],
                             payload.old["namespace"],
