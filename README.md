@@ -38,11 +38,7 @@ Randy
 hi, my name is Randy
 ```
 
-Use this library to persist Javascript objects to multiple types of JSON key-value object stores, including:
-* Built-in Browser persistent storage (IndexDB & LocalStorage)
-* Local FileSystem based JSON file storage - For use via Javascript in Node.
-* [Supabase](https://supabase.com) - which is an open source wrapper around Postgres, PostgREST, a Websockets server, etc.)
-
+# Supported Types
 Supports the following types of Javascript objects:
 * Objects (including prototype chain, preserves property descriptors)
 * Classes & class instances
@@ -51,17 +47,33 @@ Supports the following types of Javascript objects:
 * [Immutable.js](https://immutable-js.com/) objects
 * functions (serialization does not currently capture non-local scope)
 
+# Supported Object Stores
+Use this library to persist Javascript objects to multiple types of JSON key-value object stores, including:
+* Built-in Browser persistent storage (IndexDB & LocalStorage)
+* Local FileSystem based JSON file storage - For use via Javascript in Node.
+* [Supabase](https://supabase.com) - which is an open source wrapper around Postgres, PostgREST, a Websockets server, etc.)
 
-Project goals:
+## Project Goals
+* require nearly no code to persist objects to a variety of object stores
 * support many object stores out of the box; easy to add new ones.
 * make it efficient to persist large & deeply nested objects (don't duplicate entire object for each change)
-* require nearly no code to start using
 
-By using a Jsos `Var`, your Javascript objects are transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column).
+## Non-goals
+* This is not an Object Relational Mapper (ORM). While we support using a DBMS as a JSON key-value, we do not try to map any object oriented concepts to relational ones.
 
-Core Abstractions:
+## Quick Summary
+To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
+
+## Core Abstractions
 * `Var` - a mutable shared human readable reference to a Var. I.e., it is a tuple of (namespace/name, hash_of_val). Var 
 * `Val` - An immutable content-addressed Object that is automatically normalized+serialized+written to persistent storage (via a "put" command) and then read+deserialized+denormalized back to their original form (via the "get" operation).
   * We use content-based-hashing which allows for easy sharing of immutable state.
   * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
+* `JsosSession` - an builder-style single entry point for composing VarStores + ValStore + JsonStores together and then using them to interact with (i.e.g put, read, delete, subscribe-to, etc.) `Var`s and `Val`s.
+* `VarStore` - A wrapper around a transactional tuple store that handles storing and concurrently reading/updating/deleting a mapping between a human readable name/namespace and a hash of the object which can be found in a ValStore or JsonStore. VarStores serve three main purposes:
+  1. give `Val`s human readable names
+  2. provide a mutable abstraction over top of an immutable one (i.e., `Val`s)
+  3. enable sharing of mutable state between multiple users (i.e., multiple users can co-edit a `Var`, each automatically receiving updates of the others changes).
+* `ValStore` - A wrapper around a JsonStore that handles serializing 
+* `JsonStore` - base class for wrappers around different object storage implementations (e.g., Filesystem, Browser IndexDB/LocalStorage, Postgres using JsonB column, etc.). These take JSON objects as keys and values and store them in the underlying key-value store using the hash of the JSON object as the key.
 
