@@ -1,7 +1,7 @@
 # JSOS (Javascript Object Store)
 ## Object Persistence for JavaScript
 
-JSOS (JavaScript Object Store) is a framework for object serialization, persistence, and sharing.
+JSOS (JavaScript Object Store) is a framework for tranparent object persistence, and sharing.
 
 **Install**
 ```
@@ -38,8 +38,15 @@ Randy
 hi, my name is Randy
 ```
 
+# Intro
+Unlike many sophisticated serialization frameworks, we attempt to provide persistence and sharing of Javascript objects with no decorations or extra code from the developer to map their Javascript objects to the serialization format.
+
+The goal is to take (nearly) any JS/Typescript object or value and let you interact with it as you normally would, while transparently persisting it to a variety of object stores (e.g., filesystem, browser persistent storage, Postgres, etc.).
+
+Another way to think of it is: what would it be like if SSD & hard disk storage was just another layer of the memory hierarchy, like main memory.
+
 # Supported Types
-Supports the following types of Javascript objects:
+Supports the following types of Javascript... "things":
 * Objects (including prototype chain, preserves property descriptors)
 * Classes & class instances
 * Primitives, Arrays, POJOs, 
