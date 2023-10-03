@@ -3,6 +3,7 @@ import {
     RealtimeChannel,
     RealtimePostgresUpdatePayload,
 } from "@supabase/supabase-js";
+//import util from 'util'; // to overrride default string printed in node for a Var
 import { supaClientFromEnv } from "./supabase";
 import {
     Collection,
@@ -311,7 +312,7 @@ function _fromVarKey(key: VarKey | null): {
 
 // A key-val store for storing plain objects using sha1 as key. Can be backed
 // by in-memory, file-system, browser Local Storage or IndexedDB, server-based.
-abstract class JsonStore {
+export abstract class JsonStore {
     // Test if val with provided sha1 exists in this store.
     abstract hasJson(sha1: string): Promise<boolean>;
 
@@ -2109,6 +2110,10 @@ export class JsosSession {
         return new JsosSession();
     }
 
+    get jsonStores(): JsonStore[] {
+        return this.#jsonStores;
+    }
+
     get varStore(): VarStore {
         if (this.#varStore === null) {
             throw Error("The varStore has not been set on this JsosSession");
@@ -2691,6 +2696,10 @@ export class Var extends VarBase {
         return false;
     }
 }
+//const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
+//(Var as any).prototype[customInspectSymbol] = function (depth: number, options: any) {
+//    return util.inspect(this.__jsosVarObj, options);
+//}
 
 class ImmutableVar extends VarBase {
     // ImmutableVar is essentially an named Val. It is a snapshot of
@@ -2835,14 +2844,16 @@ class ImmutableVar extends VarBase {
 // the Var.  Throws error if the Var already exists in the VarStore.
 // If updateCallback is provided, it will be called any time the Var
 // is updated externally.
-export async function NewVar<T extends NotUndefined>(options: {
-    name: string;
-    namespace?: string;
-    val: T;
-    valStore?: ValStore;
-    varStore?: VarStore;
-    autoPullUpdates?: boolean;
-}): Promise<VarWrapper<T>> {
+export async function NewVar<T extends NotUndefined>(
+    options: {
+        name: string;
+        namespace?: string;
+        val: T;
+        valStore?: ValStore;
+        varStore?: VarStore;
+        autoPullUpdates?: boolean;
+    }
+): Promise<VarWrapper<T>> {
     const {
         name,
         namespace = null,

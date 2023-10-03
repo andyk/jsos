@@ -1,7 +1,6 @@
 import React from "react";
 import jsos, { Var, JsosSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { updateLanguageServiceSourceFile } from "typescript";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
@@ -19,20 +18,20 @@ const useVar = (
     // has changed using Object.is.
     let name = options?.name || "JsosDefaultVar";
     let namespace = options?.namespace;
-    let [jsosSess, setJsosSess] = React.useState<JsosSession>(jsos);
+    const jsosSess = React.useRef<JsosSession>(jsos);
     const [jsosVar, setJsosVar] = React.useState<null | any>({
         Var: { __jsosVarObj: defaultVal },
     });
 
     React.useEffect(() => {
         if (options?.supabaseClient) {
-            setJsosSess(jsos.addSupabase(options.supabaseClient))
+            jsosSess.current = jsos.addSupabase(options.supabaseClient)
         }
     }, []);
 
     React.useEffect(() => {
         (async () => {
-            let fetchedVar = await jsosSess.getOrNewImmutableVar({
+            let fetchedVar = await jsosSess.current.getOrNewImmutableVar({
                 name,
                 namespace,
                 defaultVal
@@ -40,7 +39,7 @@ const useVar = (
             setJsosVar({ Var: fetchedVar });
             console.log("finished init setAppData to: ", fetchedVar);
         })();
-        const subscrID = jsosSess.subscribeToVar({
+        const subscrID = jsosSess.current.subscribeToVar({
             name,
             namespace,
             callback: (newVar: Var) => {
@@ -73,7 +72,9 @@ const useVar = (
             return;
         }
         if (typeof updateValOrFn === "function") {
+            console.log("about to update var via __jsosUpdate()")
             setJsosVar({ Var: await v.__jsosUpdate(updateValOrFn) });
+            console.log("done updating var via __jsosUpdate()")
         } else {
             setJsosVar({ Var: await v.__jsosUpdate(() => updateValOrFn) });
         }
