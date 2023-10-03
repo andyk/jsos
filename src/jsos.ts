@@ -2200,7 +2200,7 @@ export class JsosSession {
         val: T;
         autoPullUpdates?: boolean;
     }): Promise<VarWrapper<T>> {
-        return NewVar<T>({
+        return newVar<T>({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2213,7 +2213,7 @@ export class JsosSession {
         val: T;
         autoPullUpdates?: boolean;
     }): Promise<ImmutableVarWrapper<T>> {
-        return NewImmutableVar<T>({
+        return newImmutableVar<T>({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2226,7 +2226,7 @@ export class JsosSession {
         defaultVal: any;
         autoPullUpdates?: boolean;
     }): Promise<VarWrapper<T>> {
-        return GetOrNewVar({
+        return getOrNewVar({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2239,7 +2239,7 @@ export class JsosSession {
         defaultVal: any;
         autoPullUpdates?: boolean;
     }): Promise<VarWrapper<T>> {
-        return GetOrNewImmutableVar({
+        return getOrNewImmutableVar({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2251,7 +2251,7 @@ export class JsosSession {
         namespace?: string;
         autoPullUpdates?: boolean;
     }): Promise<VarWrapper<T> | undefined> {
-        return GetVar({
+        return getVar({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2264,7 +2264,7 @@ export class JsosSession {
         callback: VarUpdateCallback;
     }): string {
         console.log("in jsossess subscribeToVar");
-        return SubscribeToVar({
+        return subscribeToVar({
             ...options,
             valStore: this.valStore,
             varStore: this.varStore,
@@ -2272,7 +2272,7 @@ export class JsosSession {
     }
 
     deleteVar(options: { name: string; namespace?: string }): Promise<boolean> {
-        return DeleteVar({
+        return deleteVar({
             ...options,
             varStore: this.varStore,
         });
@@ -2844,7 +2844,7 @@ class ImmutableVar extends VarBase {
 // the Var.  Throws error if the Var already exists in the VarStore.
 // If updateCallback is provided, it will be called any time the Var
 // is updated externally.
-export async function NewVar<T extends NotUndefined>(
+export async function newVar<T extends NotUndefined>(
     options: {
         name: string;
         namespace?: string;
@@ -2890,7 +2890,7 @@ export async function NewVar<T extends NotUndefined>(
     ) as VarWrapper<T>;
 }
 
-export async function NewImmutableVar<T extends NotUndefined>(options: {
+export async function newImmutableVar<T extends NotUndefined>(options: {
     name: string;
     namespace?: string;
     val: T;
@@ -2935,7 +2935,7 @@ export async function NewImmutableVar<T extends NotUndefined>(options: {
 // is subscribed to updates (and can also be updated via __jsosPull()).
 // if !immutable and not autoPullUpdates - returns a Var object that
 // is not subscribed to updates but can be updated via __jsosPull().
-export async function GetVar<T>(options: {
+export async function getVar<T>(options: {
     name: string;
     namespace?: string;
     valStore?: ValStore;
@@ -2969,7 +2969,7 @@ export async function GetVar<T>(options: {
 }
 
 //TODO: get ParentVal from VarStore as well and set that
-export async function GetImmutableVar<T>(options: {
+export async function getImmutableVar<T>(options: {
     name: string;
     namespace?: string;
     valStore?: ValStore;
@@ -2999,7 +2999,7 @@ export async function GetImmutableVar<T>(options: {
     ) as any;
 }
 
-export async function GetOrNewVar(options: {
+export async function getOrNewVar(options: {
     name: string;
     namespace?: string;
     defaultVal: any;
@@ -3015,7 +3015,7 @@ export async function GetOrNewVar(options: {
         valStore = DEFAULT_VAL_STORE,
         autoPullUpdates,
     } = options;
-    const gotVaR = await GetVar({
+    const gotVaR = await getVar({
         name,
         namespace,
         valStore,
@@ -3025,7 +3025,7 @@ export async function GetOrNewVar(options: {
     if (gotVaR !== undefined) {
         return gotVaR;
     }
-    return await NewVar({
+    return await newVar({
         name,
         namespace,
         val: defaultVal,
@@ -3035,7 +3035,7 @@ export async function GetOrNewVar(options: {
     });
 }
 
-export async function GetOrNewImmutableVar(options: {
+export async function getOrNewImmutableVar(options: {
     name: string;
     namespace?: string;
     defaultVal: any;
@@ -3049,7 +3049,7 @@ export async function GetOrNewImmutableVar(options: {
         varStore = DEFAULT_VAR_STORE,
         valStore = DEFAULT_VAL_STORE,
     } = options;
-    const gotVaR = await GetImmutableVar({
+    const gotVaR = await getImmutableVar({
         name,
         namespace,
         valStore,
@@ -3058,7 +3058,7 @@ export async function GetOrNewImmutableVar(options: {
     if (gotVaR !== undefined) {
         return gotVaR;
     }
-    return await NewImmutableVar({
+    return await newImmutableVar({
         name,
         namespace,
         val: defaultVal,
@@ -3067,7 +3067,7 @@ export async function GetOrNewImmutableVar(options: {
     });
 }
 
-export async function DeleteVar(options: {
+export async function deleteVar(options: {
     name: string;
     namespace?: string;
     varStore?: VarStore;
@@ -3076,7 +3076,7 @@ export async function DeleteVar(options: {
     return await varStore.deleteVar(name, namespace);
 }
 
-export function SubscribeToVar(options: {
+export function subscribeToVar(options: {
     name: string;
     namespace?: string;
     callback: VarUpdateCallback;
@@ -3111,7 +3111,7 @@ export function SubscribeToVar(options: {
     );
 }
 
-export function UnsubscribeFromUpdates(
+export function unsubscribeFromUpdates(
     subscriptionID: string,
     varStore?: VarStore
 ): boolean {
