@@ -55,15 +55,14 @@ Supports the following types of Javascript... "things":
 * functions (serialization does not currently capture non-local scope)
 
 # Supported Object Stores
-Use this library to persist Javascript objects to multiple types of JSON key-value object stores, including:
 * Built-in Browser persistent storage (IndexDB & LocalStorage)
 * Local FileSystem based JSON file storage - For use via Javascript in Node.
 * [Supabase](https://supabase.com) - which is an open source wrapper around Postgres, PostgREST, a Websockets server, etc.)
 
 ## Project Goals
-* require nearly no code to persist objects to a variety of object stores
-* support many object stores out of the box; easy to add new ones.
-* make it efficient to persist large & deeply nested objects (don't duplicate entire object for each change)
+* Allow developer to turn an in-memory object/primitive/etc. into an object that is automagically persisted (e.g., to the filesystem or a network service) without having to write any extra code.
+* Support many object stores out of the box; easy to add new ones.
+* Make it efficient to persist large & deeply nested objects (don't duplicate entire object for each change)
 
 ## Non-goals
 * This is not an Object Relational Mapper (ORM). While we support using a DBMS as a JSON key-value, we do not try to map any object oriented concepts to relational ones.
@@ -81,6 +80,6 @@ To get started, you can use a JSOS `Var` to turn your JS "value" (which can be a
   1. give `Val`s human readable names
   2. provide a mutable abstraction over top of an immutable one (i.e., `Val`s)
   3. enable sharing of mutable state between multiple users (i.e., multiple users can co-edit a `Var`, each automatically receiving updates of the others changes).
-* `ValStore` - A wrapper around a JsonStore that handles serializing 
+* `ValStore` - A key-value store and a wrapper around a JsonStore. ValStores handle \[de\]serializing (i.e., encoding more complex types down into pure JSON), as well as \[de\]normalizing (i.e., breaking out nested objects into their own entries in the JsonStore). This is useful for supporting objects that JSON doesn't handle natively, as well as for encoding objects in a way that is more efficient or performant (e.g., normalizing objects prevents lots of redundant information from being sent over the network when only a tiny portion of a large object is updated).
 * `JsonStore` - base class for wrappers around different object storage implementations (e.g., Filesystem, Browser IndexDB/LocalStorage, Postgres using JsonB column, etc.). These take JSON objects as keys and values and store them in the underlying key-value store using the hash of the JSON object as the key.
 
