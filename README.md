@@ -1,14 +1,48 @@
 # JSOS (Javascript Object Store)
-## Transparent Object Persistence for JavaScript
+## Object Persistence for JavaScript
 
-This is a Javascript/Typescript client for JSOS (JavaScript Object Store), which is a language agnostic framework for transparent object persistence and sharing.
+JSOS (JavaScript Object Store) is a framework for transparent object serialization, persistence, and sharing.
 
-This implementation supports persisting Javascript objects to multiple types of JSON object stores, including:
+**Example Install & Usage:**
+```
+$ git clone git@github.com:andyk/jsos-js.git
+$ cd jsos-js
+// make sure you have npm installed.
+$ npm link // or npm pack; npm install jsos-<REST_OF_NAME_OF_NPM_TARBALL_PACKAGE>
+$ node
+Welcome to Node.js v20.5.1.
+Type ".help" for more information.
+> const { default: jsos } = await import("jsos-js");
+> class Person {
+... name
+... constructor(name) {
+...   this.name = name
+... }
+... sayHi() {
+...   return `hi, my name is ${this.name}` 
+... }
+...}
+> andy = await jsos.NewVar({name: "myVar", val: new Person("Andy")})
+> andy.sayHi()
+hi, my name is Andy
+> andy.name = "Randy" // changes to the Var automatically persist to the underlying filesystem storage.
+// Now, kill your node REPL
+
+$ node
+> const { default: jsos } = await import("jsos-js");
+> andy = await jsos.GetVar({name: "myVar"})
+> andy.name
+Randy
+> andy.sayHi()
+hi, my name is Randy
+```
+
+Use this library to persist Javascript objects to multiple types of JSON key-value object stores, including:
 * Built-in Browser persistent storage (IndexDB & LocalStorage)
 * Local FileSystem based JSON file storage - For use via Javascript in Node.
 * [Supabase](https://supabase.com) - which is an open source wrapper around Postgres, PostgREST, a Websockets server, etc.)
 
-The goal is to make an efficient object store that requires nearly no code to start using.
+Project goals is to make an efficient object store that requires nearly no code to start using.
 
 By using a Jsos "Var", your Javascript objects are transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column).
 
