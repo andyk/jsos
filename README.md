@@ -71,8 +71,8 @@ Supports the following types of Javascript... "things":
 To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
 ## Core Abstractions
-* `Var` - a mutable shared human readable reference to a Var. I.e., it is a tuple of (namespace/name, hash_of_val). Var 
-* `Val` - An immutable content-addressed Object that is automatically normalized+serialized+written to persistent storage (via a "put" command) and then read+deserialized+denormalized back to their original form (via the "get" operation).
+* `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
+* `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put" command) and then read-then-deserialized-then-denormalized back to their original form (via the "get" operation) for the user to interact with.
   * We use content-based-hashing which allows for easy sharing of immutable state.
   * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
 * `JsosSession` - an builder-style single entry point for composing VarStores + ValStore + JsonStores together and then using them to interact with (i.e.g put, read, delete, subscribe-to, etc.) `Var`s and `Val`s.
