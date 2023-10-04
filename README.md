@@ -72,7 +72,7 @@ To get started, you can use a JSOS `Var` to turn your JS "value" (which can be a
 
 ## Core Abstractions
 * `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
-* `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put" command) and then read-then-deserialized-then-denormalized back to their original form (via the "get" operation) for the user to interact with.
+* `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put") and then read-then-deserialized-then-denormalized back to their original form (via a "get") for the user to interact with.
   * We use content-based-hashing which allows for easy sharing of immutable state.
   * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
 * `JsosSession` - an builder-style single entry point for composing VarStores + ValStore + JsonStores together and then using them to interact with (i.e.g put, read, delete, subscribe-to, etc.) `Var`s and `Val`s.
