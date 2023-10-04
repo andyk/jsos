@@ -39,7 +39,7 @@ hi, my name is Randy
 ```
 
 # Intro
-Unlike many sophisticated serialization frameworks, we attempt to provide persistence and sharing of Javascript objects with no decorations or extra code from the developer to map their Javascript objects to the serialization format.
+JSOS provides persistence and sharing of Javascript objects without requiring any decorations or extra code from the developer.
 
 The goal is to take (nearly) any JS/Typescript object or value and let you interact with it as you normally would, while transparently persisting it to a variety of object stores (e.g., filesystem, browser persistent storage, Postgres, etc.).
 
