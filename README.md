@@ -11,7 +11,7 @@ npm install @andykon/jsos
 **Basic Usage**
 ```
 $ node
-Welcome to Node.js v20.5.1.
+Welcome to Node.js
 Type ".help" for more information.
 > const { default: jsos } = await import("@andykon/jsos");
 > class Person {
