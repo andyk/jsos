@@ -70,6 +70,55 @@ Supports the following types of Javascript... "things":
 ## Quick Summary
 To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
+## Using Supabase
+To use Supabase as a backend for Jsos, you need to set up
+a Supabase project that has the two simple tables: `jsos_objects` and `jsos_vars` with the schemas as follows:
+
+```
+create table
+  public.jsos_objects (
+    hash text not null,
+    json jsonb null,
+    constraint jsos_objects_pkey primary key (hash)
+  ) tablespace pg_default;
+```
+
+```
+create table
+  public.jsos_vars (
+    name text not null,
+    namespace text null,
+    val_hash text not null,
+    constraint jsos_variables_pkey primary key (name)
+  ) tablespace pg_default;
+```
+
+Once those tables exist, the easiest way to have Jsos connect to Supabase (and use it as a JsonStore) is to set the following environment variables (which you can find under
+"Project Settings" > "API"):
+
+```
+# You can set these in your ~/.profile to always have them available
+# in your shell env.
+SUPABASE_SERVICE_ROLE_KEY_JSOS="copy and paste from supabase"
+SUPABASE_URL_JSOS="copy and paste from supabase"
+```
+
+If those env vars are set, then in node the SupabaseJsonStore should
+automatically be created and added to the default `jsos` object (i.e.,
+the default export of the jsos package, which is a `jsosSession` object).
+
+```
+$ node
+> const { default: jsos } = await import("@andykon/jsos");
+> jsos.valStore
+ValStore {
+  jsonStore: MultiJsonStore {
+    jsonStores: [ [InMemoryJsonStore], [FileBackedJsonStore], [SupabaseJsonStore] ],
+    autoCache: true
+  }
+}
+```
+
 ## Core Abstractions
 * `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
 * `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put") and then read-then-deserialized-then-denormalized back to their original form (via a "get") for the user to interact with.

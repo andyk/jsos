@@ -2323,7 +2323,12 @@ export class JsosSession {
 }
 
 // the default session.
-const jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
+let jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
+try {
+    jsos = jsos.addSupabaseFromEnv()
+} catch {
+    console.log("failed to fetch supabase from env")
+}
 export default jsos;
 
 export class Val {
