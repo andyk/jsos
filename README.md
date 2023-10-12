@@ -27,10 +27,10 @@ Type ".help" for more information.
 > andy.sayHi()
 hi, my name is Andy
 > andy.name = "Randy" // changes to the Var automatically persist to the underlying filesystem storage.
-// Now, kill your node REPL
 
+// Now, kill your node REPL. Then restart it.
 $ node
-> const { default: jsos } = await import("jsos-js");
+> const { default: jsos } = await import("@andykon/jsos");
 > andy = await jsos.GetVar({name: "myVar"})
 > andy.name
 Randy
@@ -49,9 +49,9 @@ Another way to think of it is: what would it be like if SSD & hard disk storage 
 Supports the following types of Javascript... "things":
 * Objects (including prototype chain, preserves property descriptors)
 * Classes & class instances
-* Primitives, Arrays, POJOs, 
-* Date, RegExp, Set, Map
-* [Immutable.js](https://immutable-js.com/) objects
+* Primitives, Arrays, POJOs, Set, Map
+* Date, RegExp
+* [Immutable.js](https://immutable-js.com/) objects (except for Record which is a TODO)
 * functions (serialization does not currently capture non-local scope)
 
 # Supported Object Stores

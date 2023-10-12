@@ -2053,7 +2053,8 @@ class SupabaseVarStore extends VarStore {
                 ? queryBuilder.is("namespace", namespace)
                 : queryBuilder.eq("namespace", namespace);
         const { data: row, error } = await queryBuilder.select().maybeSingle();
-        if (error) {
+        if (error && error.code !== "PGRST116") {
+            // don't error when 0 rows found w/ this name/namespace.
             throw error;
         }
         if (row) {
@@ -2097,10 +2098,12 @@ export class JsosSession {
     #valStore: ValStore | null;
     #varStore: VarStore | null;
 
-    constructor(options?: {
-        jsonStores?: JsonStore[];
-        varStore?: VarStore | null;
-    }) {
+    constructor(
+        options?: {
+            jsonStores?: JsonStore[];
+            varStore?: VarStore | null;
+        }
+    ) {
         this.#jsonStores = options?.jsonStores || [];
         this.#valStore = null; // Initialized by Getter.
         this.#varStore = options?.varStore || null;
@@ -2149,10 +2152,12 @@ export class JsosSession {
         );
     }
 
-    addBrowserLocalStorage(options?: {
-        databaseName?: string;
-        storeName?: string;
-    }): JsosSession {
+    addBrowserLocalStorage(
+        options?: {
+            databaseName?: string;
+            storeName?: string;
+        }
+    ): JsosSession {
         return this.addJsonStore(
             new BrowserIndexedDBJsonStore(
                 options?.databaseName,
@@ -2161,10 +2166,12 @@ export class JsosSession {
         ).setVarStore(new BrowserLocalStorageVarStore());
     }
 
-    addFileSystemStorage(options?: {
-        jsonStoreFileName?: string;
-        varStoreFileName?: string;
-    }): JsosSession {
+    addFileSystemStorage(
+        options?: {
+            jsonStoreFileName?: string;
+            varStoreFileName?: string;
+        }
+    ): JsosSession {
         return this.addJsonStore(
             new FileBackedJsonStore(options?.jsonStoreFileName)
         ).setVarStore(new FileBackedVarStore(options?.varStoreFileName));
@@ -2194,12 +2201,14 @@ export class JsosSession {
         ).setVarStore(new SupabaseVarStore(supabaseClient));
     }
 
-    async newVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        val: T;
-        autoPullUpdates?: boolean;
-    }): Promise<VarWrapper<T>> {
+    async newVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            val: T;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<VarWrapper<T>> {
         return newVar<T>({
             ...options,
             valStore: this.valStore,
@@ -2207,12 +2216,13 @@ export class JsosSession {
         });
     }
 
-    async newImmutableVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        val: T;
-        autoPullUpdates?: boolean;
-    }): Promise<ImmutableVarWrapper<T>> {
+    async newImmutableVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            val: T;
+        }
+    ): Promise<ImmutableVarWrapper<T>> {
         return newImmutableVar<T>({
             ...options,
             valStore: this.valStore,
@@ -2220,37 +2230,13 @@ export class JsosSession {
         });
     }
 
-    async getOrNewVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        defaultVal: any;
-        autoPullUpdates?: boolean;
-    }): Promise<VarWrapper<T>> {
-        return getOrNewVar({
-            ...options,
-            valStore: this.valStore,
-            varStore: this.varStore,
-        });
-    }
-
-    async getOrNewImmutableVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        defaultVal: any;
-        autoPullUpdates?: boolean;
-    }): Promise<VarWrapper<T>> {
-        return getOrNewImmutableVar({
-            ...options,
-            valStore: this.valStore,
-            varStore: this.varStore,
-        });
-    }
-
-    async getVar<T extends NotUndefined>(options: {
-        name: string;
-        namespace?: string;
-        autoPullUpdates?: boolean;
-    }): Promise<VarWrapper<T> | undefined> {
+    async getVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<VarWrapper<T> | undefined> {
         return getVar({
             ...options,
             valStore: this.valStore,
@@ -2258,11 +2244,55 @@ export class JsosSession {
         });
     }
 
-    subscribeToVar(options: {
-        name: string;
-        namespace?: string;
-        callback: VarUpdateCallback;
-    }): string {
+    async getImmutableVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+        }
+    ): Promise<VarWrapper<T> | undefined> {
+        return getImmutableVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    async getOrNewVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            defaultVal: any;
+            autoPullUpdates?: boolean;
+        }
+    ): Promise<VarWrapper<T>> {
+        return getOrNewVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    async getOrNewImmutableVar<T extends NotUndefined>(
+        options: {
+            name: string;
+            namespace?: string;
+            defaultVal: any;
+        }
+    ): Promise<VarWrapper<T>> {
+        return getOrNewImmutableVar({
+            ...options,
+            valStore: this.valStore,
+            varStore: this.varStore,
+        });
+    }
+
+    subscribeToVar(
+        options: {
+            name: string;
+            namespace?: string;
+            callback: VarUpdateCallback;
+        }
+    ): string {
         console.log("in jsossess subscribeToVar");
         return subscribeToVar({
             ...options,
@@ -2270,6 +2300,19 @@ export class JsosSession {
             varStore: this.varStore,
         });
     }
+
+    unsubscribeFromVar(
+        options: {
+            subscriptionID: string,
+            varStore?: VarStore
+        }
+    ): boolean {
+        return unsubscribeFromVar({
+            ...options,
+            varStore: this.varStore,
+        });
+    }
+
 
     deleteVar(options: { name: string; namespace?: string }): Promise<boolean> {
         return deleteVar({
@@ -2372,10 +2415,12 @@ type ImmutableVarWrapper<T> = T extends null
     ? ImmutableVar
     : (T extends infer U & Val ? U : T) & ImmutableVar;
 
-export async function NewVal<T extends NotUndefined>(options: {
-    object: T;
-    valStore?: ValStore;
-}): Promise<ValWrapper<T>> {
+export async function NewVal<T extends NotUndefined>(
+    options: {
+        object: T;
+        valStore?: ValStore;
+    }
+): Promise<ValWrapper<T>> {
     const { object, valStore = DEFAULT_VAL_STORE } = options;
     const [sha1, __] = await valStore.putVal(object);
     const putVal = await valStore.getVal(sha1);
@@ -2385,10 +2430,12 @@ export async function NewVal<T extends NotUndefined>(options: {
 // Returns undefined if the Val is not found in the ValStore. It isn't a problem
 // to use undefined to mean "not found" because undefined is not a valid Val by
 // our semantic definition, i.e., undefined is not just a special type of val.
-export async function GetVal(options: {
-    sha1: string;
-    valStore?: ValStore;
-}): Promise<Val | undefined> {
+export async function GetVal(
+    options: {
+        sha1: string;
+        valStore?: ValStore;
+    }
+): Promise<Val | undefined> {
     const { sha1, valStore = DEFAULT_VAL_STORE } = options;
     const obj = await valStore.getVal(sha1);
     if (obj === undefined) {
@@ -2430,13 +2477,16 @@ class VarBase {
     protected async __private_jsosPointToNewVal(
         newSha1: string
     ): Promise<void> {
+        if (newSha1 === this.__jsosSha1) {
+            return; // No-op.
+        }
         const newVal = await GetVal({
             sha1: newSha1,
             valStore: this.__jsosVal.__jsosValStore,
         });
         if (!newVal) {
             throw Error(
-                `Ca/nnot update Var name=${this.__jsosName}, ` +
+                `Cannot update Var name=${this.__jsosName}, ` +
                     `namespace = ${this.__jsosNamespace} to a Val ` +
                     `that does not exist in ValStore.`
             );
@@ -2487,7 +2537,7 @@ class VarBase {
 // When a var update fails due to a conflict, an error is thrown. You
 // can catch it, pull updates, and try again.
 //
-// If __jsosSubscribeToUpdates is false, then the val is not auto-updated when
+// If #__jsosAutoPullUpdates is false, then the val is not auto-updated when
 // changes are pushed to __jsosVarStore for the (__jsosName,
 // __jsosNamespace) key. If it is true, then __jsosVal is
 // updated automatically when changes are pushed to __jsosVarStore
@@ -2703,12 +2753,9 @@ export class Var extends VarBase {
 
 class ImmutableVar extends VarBase {
     // ImmutableVar is essentially an named Val. It is a snapshot of
-    // the mapping between
-    // Note that this does *not* make the var immutable in the VarStore,
-    // just immutable via this Var object.
-    // while true, causes local mutations to this var to fail, though remote
-    // changes can still be pulled in. This is a useful guard against accidental
-    // updates.
+    // the mapping between a name/namespace & a hash of a Val.
+    // Note that for this abstraaction, the immutability is only enforced on the client side,
+    // i.e., while this object is immutable, the var tuple is not necesssarily immutable in the VarStore,
 
     constructor(
         name: string,
@@ -2890,21 +2937,23 @@ export async function newVar<T extends NotUndefined>(
     ) as VarWrapper<T>;
 }
 
-export async function newImmutableVar<T extends NotUndefined>(options: {
-    name: string;
-    namespace?: string;
-    val: T;
-    valStore?: ValStore;
-    varStore?: VarStore;
-    autoPullUpdates?: boolean;
-}): Promise<ImmutableVarWrapper<T>> {
+// Note: ImmutableVars do not support autoPullUpdates. You have to subscribe to updates explicitly
+// using subscribeToVar. 
+export async function newImmutableVar<T extends NotUndefined>(
+    options: {
+        name: string;
+        namespace?: string;
+        val: T;
+        valStore?: ValStore;
+        varStore?: VarStore;
+    }
+): Promise<ImmutableVarWrapper<T>> {
     const {
         name,
         namespace = null,
         val,
         valStore = DEFAULT_VAL_STORE,
         varStore = DEFAULT_VAR_STORE,
-        autoPullUpdates = true,
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -2935,13 +2984,15 @@ export async function newImmutableVar<T extends NotUndefined>(options: {
 // is subscribed to updates (and can also be updated via __jsosPull()).
 // if !immutable and not autoPullUpdates - returns a Var object that
 // is not subscribed to updates but can be updated via __jsosPull().
-export async function getVar<T>(options: {
-    name: string;
-    namespace?: string;
-    valStore?: ValStore;
-    varStore?: VarStore;
-    autoPullUpdates?: boolean;
-}): Promise<VarWrapper<T> | undefined> {
+export async function getVar<T>(
+    options: {
+        name: string;
+        namespace?: string;
+        valStore?: ValStore;
+        varStore?: VarStore;
+        autoPullUpdates?: boolean;
+    }
+): Promise<VarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
@@ -2969,12 +3020,14 @@ export async function getVar<T>(options: {
 }
 
 //TODO: get ParentVal from VarStore as well and set that
-export async function getImmutableVar<T>(options: {
-    name: string;
-    namespace?: string;
-    valStore?: ValStore;
-    varStore?: VarStore;
-}): Promise<VarWrapper<T> | undefined> {
+export async function getImmutableVar<T>(
+    options: {
+        name: string;
+        namespace?: string;
+        valStore?: ValStore;
+        varStore?: VarStore;
+    }
+): Promise<VarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
@@ -2999,14 +3052,16 @@ export async function getImmutableVar<T>(options: {
     ) as any;
 }
 
-export async function getOrNewVar(options: {
-    name: string;
-    namespace?: string;
-    defaultVal: any;
-    varStore?: VarStore;
-    valStore?: ValStore;
-    autoPullUpdates?: boolean;
-}) {
+export async function getOrNewVar(
+    options: {
+        name: string;
+        namespace?: string;
+        defaultVal: any;
+        varStore?: VarStore;
+        valStore?: ValStore;
+        autoPullUpdates?: boolean;
+    }
+) {
     const {
         name,
         namespace,
@@ -3035,13 +3090,15 @@ export async function getOrNewVar(options: {
     });
 }
 
-export async function getOrNewImmutableVar(options: {
-    name: string;
-    namespace?: string;
-    defaultVal: any;
-    varStore?: VarStore;
-    valStore?: ValStore;
-}) {
+export async function getOrNewImmutableVar(
+    options: {
+        name: string;
+        namespace?: string;
+        defaultVal: any;
+        varStore?: VarStore;
+        valStore?: ValStore;
+    }
+) {
     const {
         name,
         namespace,
@@ -3067,22 +3124,15 @@ export async function getOrNewImmutableVar(options: {
     });
 }
 
-export async function deleteVar(options: {
-    name: string;
-    namespace?: string;
-    varStore?: VarStore;
-}): Promise<boolean> {
-    const { name, namespace = null, varStore = DEFAULT_VAR_STORE } = options;
-    return await varStore.deleteVar(name, namespace);
-}
-
-export function subscribeToVar(options: {
-    name: string;
-    namespace?: string;
-    callback: VarUpdateCallback;
-    varStore?: VarStore;
-    valStore?: ValStore;
-}): string {
+export function subscribeToVar(
+    options: {
+        name: string;
+        namespace?: string;
+        callback: VarUpdateCallback;
+        varStore?: VarStore;
+        valStore?: ValStore;
+    }
+): string {
     const {
         name,
         namespace = null,
@@ -3111,10 +3161,23 @@ export function subscribeToVar(options: {
     );
 }
 
-export function unsubscribeFromUpdates(
-    subscriptionID: string,
-    varStore?: VarStore
+export function unsubscribeFromVar(
+    options: {
+        subscriptionID: string,
+        varStore?: VarStore
+    }
 ): boolean {
-    const varStoreToUse = varStore || DEFAULT_VAR_STORE;
-    return varStoreToUse.unsubscribeFromUpdates(subscriptionID);
+    const varStoreToUse = options.varStore || DEFAULT_VAR_STORE;
+    return varStoreToUse.unsubscribeFromUpdates(options.subscriptionID);
+}
+
+export async function deleteVar(
+    options: {
+        name: string;
+        namespace?: string;
+        varStore?: VarStore;
+    }
+): Promise<boolean> {
+    const { name, namespace = null, varStore = DEFAULT_VAR_STORE } = options;
+    return await varStore.deleteVar(name, namespace);
 }

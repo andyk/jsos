@@ -42,10 +42,10 @@ const useVar = (
         const subscrID = jsosSess.current.subscribeToVar({
             name,
             namespace,
-            callback: (newVar: Var) => {
-                console.log("handleNewVar: ", newVar);
+            callback: (updatedVar: Var) => {
+                console.log("handling updatedVar inside subscribeToVar callback: ", updatedVar);
                 setJsosVar((oldVal: any) => {
-                    const updatedJsosVar = { Var: newVar };
+                    const updatedJsosVar = { Var: updatedVar };
                     console.log(
                         "setJsosVar(updatedJsosVar = ",
                         updatedJsosVar,

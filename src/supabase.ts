@@ -72,8 +72,8 @@ export const createSupaClient: CreateClientType = (
 }
 
 export const supaClientFromEnv = () => {
-    const supabaseEnvKey = process.env.SUPABASE_JSOS_SERVICE_ROLE_KEY;
-    const supabaseProjectUrl = process.env.SUPABASE_JSOS_PROJECT_URL;
+    const supabaseEnvKey = process.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
+    const supabaseProjectUrl = process.env.SUPABASE_URL_JSOS;
     if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
         throw Error(
             `SUPABASE_JSOS_SERVICE_ROLE_KEY=${supabaseEnvKey}, ` +
@@ -81,7 +81,7 @@ export const supaClientFromEnv = () => {
             "both must be defined in environment."
         );
     }
-    return createClient(
+    return createSupaClient(
         supabaseProjectUrl,
         supabaseEnvKey
     );
