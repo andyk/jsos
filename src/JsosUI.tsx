@@ -34,7 +34,7 @@ export default function JsosUI({ }) {
         </div>
         <div>
             <div>ValStore:</div>
-            {j.current.valStore ? (<li>j.current.valStore.constructor.name</li>) : " No ValStore."}
+                {j.current.valStore ? (<li>{j.current.valStore.constructor.name}</li>) : " No ValStore."}
         </div>
         <div>
             VarStore:

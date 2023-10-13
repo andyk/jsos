@@ -22,6 +22,7 @@ const useVar = (
     const [jsosVar, setJsosVar] = React.useState<null | any>({
         Var: { __jsosVarObj: defaultVal },
     });
+    const [localVarObj, setLocalVarObj] = React.useState<any>(defaultVal);
 
     React.useEffect(() => {
         if (options?.supabaseClient) {
@@ -59,7 +60,7 @@ const useVar = (
     }, [jsosSess]);
 
     React.useEffect(() => {
-        console.log("jsosVar changed: ", jsosVar);
+        setLocalVarObj(jsosVar?.Var?.__jsosVarObj);
     }, [jsosVar]);
 
     async function updateVar(updateValOrFn: any) {
@@ -67,6 +68,7 @@ const useVar = (
         if (!v) {
             return;
         }
+        setLocalVarObj(updateValOrFn);
         if (!("__jsosUpdate" in v)) {
             console.log("skipping updateVar since {Var} is not a jsos Var ", v);
             return;
@@ -80,7 +82,7 @@ const useVar = (
         }
     }
 
-    return [jsosVar?.Var?.__jsosVarObj, updateVar];
+    return [localVarObj, updateVar];
 };
 
 export default useVar;

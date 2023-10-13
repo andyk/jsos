@@ -72,8 +72,20 @@ export const createSupaClient: CreateClientType = (
 }
 
 export const supaClientFromEnv = () => {
-    const supabaseEnvKey = process.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
-    const supabaseProjectUrl = process.env.SUPABASE_URL_JSOS;
+    let supabaseEnvKey;
+    let supabaseProjectUrl;
+    try {
+        supabaseEnvKey = process.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
+        supabaseProjectUrl = process.env.SUPABASE_URL_JSOS;
+    } catch (e) {
+        console.log("supabase env vars not found via process.env... ", e)
+    }
+    try {
+        supabaseEnvKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
+        supabaseProjectUrl = import.meta.env.SUPABASE_URL_JSOS;
+    } catch (e) {
+        console.log("supabase env vars not found via import.meta.env... ", e)
+    }
     if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
         throw Error(
             `SUPABASE_JSOS_SERVICE_ROLE_KEY=${supabaseEnvKey}, ` +
