@@ -22,6 +22,7 @@ test("Basic ObjectStore and ValStore operations.", async () => {
         [2, 22],
         [1, 11],
         ["a", "aa"],
+        null
     ];
     const js = new InMemoryJsonStore();
     const key = await js.putJson(orig);
@@ -35,12 +36,13 @@ test("Basic ObjectStore and ValStore operations.", async () => {
     const vs = new ValStore(js);
     const encoded = vs.encode(orig);
     const normalized = vs.normalize(encoded);
-    expect(normalized.length).toBe(10);
+    expect(normalized.length).toBe(11);
 
     const putVal = await vs.putVal(orig);
     const gotVal = await vs.getVal(putVal[0]);
     expect(orig).toEqual(gotVal);
 
+    expect(await vs.getVal((await vs.putVal(null))[0])).toEqual(null);
 });
 
 test("ValStore with immutable types", async () => {
