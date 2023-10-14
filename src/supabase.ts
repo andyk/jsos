@@ -81,15 +81,20 @@ export const supaClientFromEnv = () => {
         console.log("supabase env vars not found via process.env... ", e)
     }
     try {
-        supabaseEnvKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
-        supabaseProjectUrl = import.meta.env.SUPABASE_URL_JSOS;
+        if (typeof window !== "undefined") {
+            console.log("IN THE CONDITIONAL")
+            // <REPLACE ME WITH ATSIGN>ts-expect-error: Using Vite's import.meta.env
+            //supabaseEnvKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
+            // <REPLACE ME WITH ATSIGN>ts-expect-error: Using Vite's import.meta.env
+            //supabaseProjectUrl = import.meta.env.SUPABASE_URL_JSOS;
+        }
     } catch (e) {
         console.log("supabase env vars not found via import.meta.env... ", e)
     }
     if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
         throw Error(
-            `SUPABASE_JSOS_SERVICE_ROLE_KEY=${supabaseEnvKey}, ` +
-            `SUPABASE_JSOS_PROJECT_URL=${supabaseProjectUrl}; but ` +
+            `SUPABASE_SERVICE_ROLE_KEY_JSOS=${supabaseEnvKey}, ` +
+            `SUPABASE_URL_JSOS=${supabaseProjectUrl}; but ` +
             "both must be defined in environment."
         );
     }
