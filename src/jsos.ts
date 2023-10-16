@@ -352,9 +352,9 @@ export abstract class JsonStore {
     abstract putJson(object: Json): Promise<string>;
     // If network cost/latency is high, you probably want to override this
     // to batch multiple puts into a single network message.
-    async putJsons(objects: Array<Json>): Promise<Array<string>> {
+    async putJsons(objects: Array<Json>): Promise<[string, Json][]> {
         const promises = objects.map(
-            async (object) => await this.putJson(object)
+            async (object): Promise<[string, Json]> => [await this.putJson(object), object]
         );
         return await Promise.all(promises);
     }
@@ -483,6 +483,32 @@ class MultiJsonStore extends JsonStore {
         return results[0];
     }
 
+    async putJsons(objects: Array<Json>): Promise<[string, Json][]> {
+        console.log("in MultiJsonStore.putJsons for objs ", JSON.stringify(objects));
+        // Create an array of promises, where each promise represents a batch put operation 
+        // on a single store and resolves to an array of strings (one for each object put).
+        const allStorePutPromises = this.jsonStores.map((store) => store.putJsons(objects));
+
+        // Use Promise.all to wait for all of the batch put operations to complete for all stores.
+        const allStorePutResults = await Promise.all(allStorePutPromises);
+
+        // Ensure consistency by checking that all stores returned the same array of strings for the batch put operations.
+        // If not, throw an error.
+        const firstStoreResults = allStorePutResults[0];
+        allStorePutResults.slice(1).forEach((storePutResults) => {
+            storePutResults.forEach(([hash, json], i) => {
+                if (firstStoreResults[i][0] !== hash) {
+                    throw new Error(`Inconsistent results when putting object ${json}.`);
+                }
+            });
+        });
+
+  
+      // If all put operations were successful and consistent, return the results from the first store, 
+        // as all the results are the same.
+        return firstStoreResults;
+    }
+
     async deleteJson(sha1: string): Promise<void> {
         const promises = this.jsonStores.map(async (jsonStore) => {
             await jsonStore.deleteJson(sha1);
@@ -586,7 +612,7 @@ export class ValStore {
     ): Promise<Array<[string, NormalizedJson]>> {
         const encoded = this.encode(object);
         const normalized = this.normalize(encoded);
-        const manifest = await this.jsonStore.putJsons(normalized);
+        const manifest = (await this.jsonStore.putJsons(normalized)).map(([sha1, _]) => sha1);
         if (normalized.length !== manifest.length) {
             throw new Error(
                 `putJsons() returned ${manifest.length} sha1 strings, but ` +
