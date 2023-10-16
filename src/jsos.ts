@@ -432,7 +432,6 @@ class MultiJsonStore extends JsonStore {
         for (const jsonStore of this.jsonStores) {
             const stillMissing = Array.from(resultMap.keys()).filter(sha1 => resultMap.get(sha1) === undefined);
             if (stillMissing.length === 0) {
-                console.log("All sha1s found, breaking out of loop.")
                 break;
             }
             const gotVals = await jsonStore.getJsons(stillMissing);
@@ -484,7 +483,6 @@ class MultiJsonStore extends JsonStore {
     }
 
     async putJsons(objects: Array<Json>): Promise<[string, Json][]> {
-        console.log("in MultiJsonStore.putJsons for objs ", JSON.stringify(objects));
         // Create an array of promises, where each promise represents a batch put operation 
         // on a single store and resolves to an array of strings (one for each object put).
         const allStorePutPromises = this.jsonStores.map((store) => store.putJsons(objects));
@@ -1929,95 +1927,79 @@ class SupabaseJsonStore extends JsonStore {
         }
     }
 
-    //async hasJsons(sha1Array: Array<string>): Promise<[string, boolean][]> {
-    //    const { data: rows, error } = await this.supabaseClient
-    //        .from(this.objectsTableName)
-    //        .select(DEFAULT_OBJECT_KEY_COL)
-    //        .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
-    //    if (error) {
-    //        throw error;
-    //    }
-    //    const foundSha1s = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
-    //    return sha1Array.map((sha1) => [sha1, foundSha1s.has(sha1)]);
-    //}
+    async hasJsons(sha1Array: Array<string>): Promise<[string, boolean][]> {
+        const { data: rows, error } = await this.supabaseClient
+            .from(this.objectsTableName)
+            .select(DEFAULT_OBJECT_KEY_COL)
+            .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        if (error) {
+            throw error;
+        }
+        const foundSha1s = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
+        return sha1Array.map((sha1) => [sha1, foundSha1s.has(sha1)]);
+    }
 
-    //async getJsons(sha1Array: Array<string>): Promise<[string, Json | undefined][]> {
-    //    console.log("In SupabaseJsonStore getJsons, looking for ", sha1Array);
+    async getJsons(sha1Array: Array<string>): Promise<[string, Json | undefined][]> {
+        console.log("In SupabaseJsonStore getJsons, looking for ", sha1Array);
 
-    //    // Fetch objects from the database.
-    //    const { data: rows, error } = await this.supabaseClient
-    //        .from(this.objectsTableName)
-    //        .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
-    //        .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        // Fetch objects from the database.
+        const { data: rows, error } = await this.supabaseClient
+            .from(this.objectsTableName)
+            .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
+            .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
 
-    //    // Handle potential error during fetching.
-    //    if (error) {
-    //        throw error;
-    //    }
+        // Handle potential error during fetching.
+        if (error) {
+            throw error;
+        }
 
-    //    // Map each retrieved hash to its corresponding json object.
-    //    const rowTuples = rows.map<[string, Json]>(row => [row[DEFAULT_OBJECT_KEY_COL], row.json]);
-    //    const retrievedHashMap: Map<string, Json> = new Map(rowTuples);
+        // Map each retrieved hash to its corresponding json object.
+        const rowTuples = rows.map<[string, Json]>(row => [row[DEFAULT_OBJECT_KEY_COL], row.json]);
+        const retrievedHashMap: Map<string, Json> = new Map(rowTuples);
 
-    //    // Construct the final result map, inserting undefined for not found objects.
-    //    const resultMap: Map<string, Json | undefined> = new Map();
-    //    sha1Array.forEach(sha1 => resultMap.set(sha1, retrievedHashMap.get(sha1) || undefined));
+        // Construct the final result map, inserting undefined for not found objects.
+        const resultMap: Map<string, Json | undefined> = new Map();
+        sha1Array.forEach(sha1 => resultMap.set(sha1, retrievedHashMap.get(sha1) || undefined));
 
-    //    console.log("In SupabaseJsonStore getJsons, returning results ", JSON.stringify(Array.from(resultMap)));
-    //    return Array.from(resultMap);
-    //}
-    
+        console.log("In SupabaseJsonStore getJsons, returning results ", JSON.stringify(Array.from(resultMap)));
+        return sha1Array.map((sha1) => [sha1, retrievedHashMap.get(sha1)]);
+    }
 
-    //async putJsons(objects: Array<Json>): Promise<Map<string, Json>> {
-    //    const sha1sAndObjs: [string, Json][] = objects.map((json) => [getSha1(json), json]);
-    //    const sha1ToJsonMap = new Map<string, Json>(sha1sAndObjs);
-    //    
-    //    const deduped = Array.from(sha1ToJsonMap).map(([sha1, json]) => {
-    //        return { [DEFAULT_OBJECT_KEY_COL]: sha1, json };
-    //    });
+    async putJsons(objects: Array<Json>): Promise<[string, Json][]> {
+        const sha1sAndObjs: [string, Json][] = objects.map((json) => [getSha1(json), json]);
+        const sha1ToJsonMap = new Map<string, Json>(sha1sAndObjs);
+        
+        const deduped = Array.from(sha1ToJsonMap).map(([sha1, json]) => {
+            return { [DEFAULT_OBJECT_KEY_COL]: sha1, json };
+        });
 
-    //    // use hasJsons() to further filter the deduped list to be only
-    //    // those sha1s that don't already exist in the store.
-    //    const sha1sAlreadyPut = await this.hasJsons(sha1sAndObjs.map(([sha1, _]) => sha1));
-    //    const sha1sToPut = deduped.filter(({ [DEFAULT_OBJECT_KEY_COL]: sha1 }) => !sha1sAlreadyPut.get(sha1));
+        // use hasJsons() to further filter the deduped list to be only
+        // those sha1s that don't already exist in the store.
+        const sha1sAlreadyPut = new Map(await this.hasJsons(sha1sAndObjs.map(([sha1, _]) => sha1)));
+        const sha1sToPut = deduped.filter(({ [DEFAULT_OBJECT_KEY_COL]: sha1 }) => !sha1sAlreadyPut.get(sha1));
 
-    //    const { data: rows, error } = await this.supabaseClient
-    //        .from(this.objectsTableName)
-    //        .insert(sha1sToPut)
-    //        .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
-    //    if (error) {
-    //        throw error;
-    //    }
-    //    const hashesInserted = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
-    //    if (sha1sAlreadyPut.size + hashesInserted.size !== sha1sAndObjs.length) {
-    //        throw new Error(
-    //            `The number of objects put + the number of ` + `objects that
-    //            were already in the store
-    //            (${hashesInserted.size}+${sha1sAlreadyPut.size}` +
-    //            `=${sha1sAlreadyPut.size + hashesInserted.size}) should equal `
-    //            + `the number of objects passed to putJsons(${
-    //            sha1sAndObjs.length}).`
-    //        );
-    //    }
-    //    // return a map from sha1 to object for all objects that were inserted and all
-    //    // objects that we didn't need to put becuase they were alreadyPut
-    //    const resultMap = new Map<string, Json>();
-    //    sha1sAndObjs.forEach(([sha1, json]) => {
-    //        if (hashesInserted.has(sha1)) {
-    //            resultMap.set(sha1, json);
-    //        } else {
-    //            const existingObj = sha1ToJsonMap.get(sha1);
-    //            if (existingObj) {
-    //                resultMap.set(sha1, existingObj);
-    //            } else {
-    //                throw new Error(
-    //                    `Expected sha1 ${sha1} to be in sha1ToJsonMap`
-    //                );
-    //            }
-    //        }
-    //    });
-    //    return resultMap;
-    //}
+        const { data: rows, error } = await this.supabaseClient
+            .from(this.objectsTableName)
+            .insert(sha1sToPut)
+            .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
+        if (error) {
+            throw error;
+        }
+        // TODO we probably don't need to do the final select after the insert
+        // since we should get an error if the insert failed for any reason.
+        // so the final select plust the following check is probably unecessary.
+        const hashesInserted = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
+        if (sha1sAlreadyPut.size + hashesInserted.size !== deduped.length) {
+            throw new Error(
+                "The number of objects put + the number of objects that " +
+                "were already in the store " + 
+                `(${hashesInserted.size}+${sha1sAlreadyPut.size}` +
+                `=${sha1sAlreadyPut.size + hashesInserted.size}) should equal ` +
+                `the deduped number of objects passed to putJsons(${deduped.length}).`
+            );
+        }
+        return sha1sAndObjs;
+    }
 
     async deleteJson(sha1: string): Promise<void> {
         const { data: row, error } = await this.supabaseClient
