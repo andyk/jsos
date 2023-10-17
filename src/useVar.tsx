@@ -23,6 +23,7 @@ const useVar = (
         Var: { __jsosVarObj: defaultVal },
     });
     const [localVarObj, setLocalVarObj] = React.useState<any>(defaultVal);
+    const [subscrID, setSubscrID] = React.useState<string | null>(null);
 
     React.useEffect(() => {
         if (options?.supabaseClient) {
@@ -38,30 +39,34 @@ const useVar = (
                 defaultVal
             });
             setJsosVar({ Var: fetchedVar });
+            setLocalVarObj(fetchedVar.__jsosVarObj)
             console.log("finished init setAppData to: ", fetchedVar);
         })();
-        const subscrID = jsosSess.current.subscribeToVar({
-            name,
-            namespace,
-            callback: (updatedVar: Var) => {
-                console.log("handling updatedVar inside subscribeToVar callback: ", updatedVar);
-                setJsosVar((oldVal: any) => {
-                    const updatedJsosVar = { Var: updatedVar };
-                    console.log(
-                        "setJsosVar(updatedJsosVar = ",
-                        updatedJsosVar,
-                        ")"
-                    );
-                    return updatedJsosVar;
-                });
-            },
-        });
+        setSubscrID(
+            jsosSess.current.subscribeToVar({
+                name,
+                namespace,
+                callback: (updatedVar: Var) => {
+                    console.log("handling updatedVar inside subscribeToVar callback: ", updatedVar);
+                    setJsosVar((oldVal: any) => {
+                        const updatedJsosVar = { Var: updatedVar };
+                        console.log(
+                            "setJsosVar(updatedJsosVar = ",
+                            updatedJsosVar,
+                            ")"
+                        );
+                        return updatedJsosVar;
+                    });
+                    setLocalVarObj(updatedVar.__jsosVarObj)
+                },
+            })
+        );
         console.log("subscribed to var: ", subscrID);
     }, [jsosSess]);
 
-    React.useEffect(() => {
-        setLocalVarObj(jsosVar?.Var?.__jsosVarObj);
-    }, [jsosVar]);
+    //React.useEffect(() => {
+    //    setLocalVarObj(jsosVar?.Var?.__jsosVarObj);
+    //}, [jsosVar]);
 
     async function updateVar(updateValOrFn: any) {
         const v = jsosVar["Var"];
@@ -75,7 +80,7 @@ const useVar = (
         }
         if (typeof updateValOrFn === "function") {
             console.log("about to update var via __jsosUpdate()")
-            setJsosVar({ Var: await v.__jsosUpdate(updateValOrFn) });
+            setJsosVar({ Var: await v.__jsosUpdate(updateValOrFn, subscrID) });
             console.log("done updating var via __jsosUpdate()")
         } else {
             setJsosVar({ Var: await v.__jsosUpdate(() => updateValOrFn) });

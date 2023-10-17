@@ -241,12 +241,12 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         const w = await jsos.newVar({ name: "myTestVar", val: [1, 2, 3] });
         const otherW = await jsos.getVar<typeof w>({ name: "myTestVar", autoPullUpdates: false });
         w[0] = 100;
-        await sleep(500);
+        await sleep(200);
         expect(otherW).toBeDefined();
         if (otherW) { // Typeguard
             expect(otherW[0]).toBe(1);
             await otherW.__jsosPull();
-            await sleep(1700);
+            await sleep(200);
             expect(otherW[0]).toBe(100);
         }
     });

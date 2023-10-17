@@ -1111,7 +1111,8 @@ export abstract class VarStore {
         name: string,
         namespace: string | null,
         oldSha1: string,
-        newSha1: string
+        newSha1: string,
+        subscriptionUUID?: string
     ): Promise<boolean>;
 
     // Return true if the Var was found and deleted. False otherwise.  Must
@@ -1119,7 +1120,8 @@ export abstract class VarStore {
     // successful.
     abstract deleteVar(
         name: string,
-        namespace: string | null
+        namespace: string | null,
+        subscriptionUUID?: string
     ): Promise<boolean>;
 
     // varListeners is a map of varKey (i.e. name, namespace) -> Map<subscriptionUUID, callbackFn>
@@ -1127,7 +1129,12 @@ export abstract class VarStore {
         new Map();
     subscriptionIdToVarKey: Map<SubscriptionUUID, VarKey> = new Map();
 
-    // Returns a subscription UUID that can be used to unsubscribe from updates.
+    // Returns a subscription UUID that can be used to unsubscribe from updates
+    // and which can also be passed to updateVar and deleteVar to ensure that
+    // a subscriber can opt out of their own updates. To opt out of receiving the 
+    // updates they are responsible for, they must pass their subscription UUID
+    // with the update / delete calls).
+    //
     // The calls to callbackFn are guaranteed to come in-order, i.e., since
     // the callbacks can contain the oldSha1 and newSha1, you can use them to
     // build a linked-list of updates to the var and we don't want the subscriber
@@ -1140,7 +1147,7 @@ export abstract class VarStore {
     subscribeToUpdates(
         name: string,
         namespace: string | null,
-        callbackFn: VarStoreSubCallback
+        callbackFn: VarStoreSubCallback,
     ): SubscriptionUUID {
         const uuid = uuidv4();
         const varKey = _toVarKey(name, namespace);
@@ -1170,16 +1177,23 @@ export abstract class VarStore {
         return true;
     }
 
+    // TODOD: allow notifying listeners when Var is deleted.
     notifyListeners(
         name: string,
         namespace: string | null,
         oldSha1: string | null,
-        newSha1: string
+        newSha1: string,
+        subscriptionUUID?: string
     ): void {
         const key = _toVarKey(name, namespace);
         if (this.varListeners.has(key)) {
-            this.varListeners.get(key)?.forEach((cb) => {
-                cb(name, namespace, oldSha1, newSha1);
+            this.varListeners.get(key)?.forEach((cb, subUUID) => {
+                if (subUUID !== subscriptionUUID) {
+                    cb(name, namespace, oldSha1, newSha1);
+                } else {
+                    console.log("skipping callback for subscriptionUUID ", subUUID, " because it matches the subscriptionUUID passed to updateVar")
+                }
+
             });
         }
     }
@@ -1255,7 +1269,8 @@ export class InMemoryVarStore extends VarStore {
         name: string,
         namespace: string | null,
         oldSha1: string,
-        newSha1: string
+        newSha1: string,
+        subscriptionUUID?: string
     ): Promise<boolean> {
         const key = _toVarKey(name, namespace);
         return await this.mutex.runExclusive(async () => {
@@ -1267,12 +1282,16 @@ export class InMemoryVarStore extends VarStore {
                 return false;
             }
             this.varMap.set(key, newSha1);
-            this.notifyListeners(name, namespace, oldSha1, newSha1);
+            this.notifyListeners(name, namespace, oldSha1, newSha1, subscriptionUUID);
             return true;
         });
     }
 
-    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+    async deleteVar(
+        name: string,
+        namespace: string | null,
+        subscriptionUUID?: string
+    ): Promise<boolean> {
         const key = _toVarKey(name, namespace);
         if (!this.varMap.has(key)) {
             return false;
@@ -1280,6 +1299,8 @@ export class InMemoryVarStore extends VarStore {
         await this.mutex.runExclusive(async () => {
             this.varMap.delete(key);
         });
+        // TODO: notifyListeners that the var has been deleted
+        //this.notifyListeners(name, namespace, oldSha1, newSha1, subscriptionUUID);
         return true;
     }
 }
@@ -1928,25 +1949,30 @@ class SupabaseJsonStore extends JsonStore {
     }
 
     async hasJsons(sha1Array: Array<string>): Promise<[string, boolean][]> {
-        const { data: rows, error } = await this.supabaseClient
-            .from(this.objectsTableName)
-            .select(DEFAULT_OBJECT_KEY_COL)
-            .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        //const { data: rows, error } = await this.supabaseClient
+        //    .from(this.objectsTableName)
+        //    .select(DEFAULT_OBJECT_KEY_COL)
+        //    .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        const { data, error }: { data: null | string[], error: any } = await this.supabaseClient
+            .rpc('get_hashes', { hashes: sha1Array });
         if (error) {
             throw error;
         }
-        const foundSha1s = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
+        const foundSha1s = new Set(data);
         return sha1Array.map((sha1) => [sha1, foundSha1s.has(sha1)]);
     }
 
     async getJsons(sha1Array: Array<string>): Promise<[string, Json | undefined][]> {
-        console.log("In SupabaseJsonStore getJsons, looking for ", sha1Array);
-
-        // Fetch objects from the database.
-        const { data: rows, error } = await this.supabaseClient
-            .from(this.objectsTableName)
-            .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
-            .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        // Using the standard supabase insert() with a lnog list of objects
+        // exceeds http get length limits for supabase, so using an RPC instead
+        // per https://github.com/supabase/postgrest-js/issues/393#issuecomment-1404012263
+        // https://github.com/supabase/supabase-js/issues/678#issuecomment-1373336589 etc.
+        //const { data: rows, error } = await this.supabaseClient
+        //    .from(this.objectsTableName)
+        //    .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
+        //    .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        const { data, error }: { data: null | { [DEFAULT_OBJECT_KEY_COL]: string, json: string }[], error: any } = await this.supabaseClient
+            .rpc('get_jsons', { hashes: sha1Array });
 
         // Handle potential error during fetching.
         if (error) {
@@ -1954,7 +1980,7 @@ class SupabaseJsonStore extends JsonStore {
         }
 
         // Map each retrieved hash to its corresponding json object.
-        const rowTuples = rows.map<[string, Json]>(row => [row[DEFAULT_OBJECT_KEY_COL], row.json]);
+        const rowTuples = data?.map<[string, Json]>(row => [row[DEFAULT_OBJECT_KEY_COL], row.json]);
         const retrievedHashMap: Map<string, Json> = new Map(rowTuples);
 
         // Construct the final result map, inserting undefined for not found objects.
@@ -1969,35 +1995,52 @@ class SupabaseJsonStore extends JsonStore {
         const sha1sAndObjs: [string, Json][] = objects.map((json) => [getSha1(json), json]);
         const sha1ToJsonMap = new Map<string, Json>(sha1sAndObjs);
         
-        const deduped = Array.from(sha1ToJsonMap).map(([sha1, json]) => {
-            return { [DEFAULT_OBJECT_KEY_COL]: sha1, json };
+        ////const deduped = Array.from(sha1ToJsonMap).map(([sha1, json]) => {
+        ////    return { [DEFAULT_OBJECT_KEY_COL]: sha1, json };
+        ////});
+
+        ////// use hasJsons() to further filter the deduped list to be only
+        ////// those sha1s that don't already exist in the store.
+        ////const sha1sAlreadyPut = new Map(await this.hasJsons(sha1sAndObjs.map(([sha1, _]) => sha1)));
+        ////const rowsToPut = deduped.filter(({ [DEFAULT_OBJECT_KEY_COL]: sha1 }) => sha1sAlreadyPut.get(sha1) === undefined);
+        ////if (sha1sAlreadyPut.size + rowsToPut.length !== deduped.length) {
+        ////    throw Error(`sha1sAlreadyPut.size(${sha1sAlreadyPut.size}) + rowsToPut.length (${rowsToPut.length}) !== deduped.length (${deduped.length})`)
+        ////}
+
+        const rowsToPut = objects.map((json) => {
+            return { [DEFAULT_OBJECT_KEY_COL]: getSha1(json), json }
         });
 
-        // use hasJsons() to further filter the deduped list to be only
-        // those sha1s that don't already exist in the store.
-        const sha1sAlreadyPut = new Map(await this.hasJsons(sha1sAndObjs.map(([sha1, _]) => sha1)));
-        const sha1sToPut = deduped.filter(({ [DEFAULT_OBJECT_KEY_COL]: sha1 }) => !sha1sAlreadyPut.get(sha1));
-
-        const { data: rows, error } = await this.supabaseClient
-            .from(this.objectsTableName)
-            .insert(sha1sToPut)
-            .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
-        if (error) {
-            throw error;
+        // Using the standard supabase insert() with a lnog list of objects
+        // exceeds http get length limits for supabase, so using an RPC instead
+        // per https://github.com/supabase/postgrest-js/issues/393#issuecomment-1404012263
+        // https://github.com/supabase/supabase-js/issues/678#issuecomment-1373336589 etc.
+        //const { data: rows, error } = await this.supabaseClient
+        //    .from(this.objectsTableName)
+        //    .insert(sha1sToPut)
+        //    .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
+        let rows = null;
+        if (rowsToPut.length > 0) {
+            let { data, error }: { data: null | { [DEFAULT_OBJECT_KEY_COL]: string, json: string }[], error: any } = await this.supabaseClient
+                .rpc('put_jsons', { objects: rowsToPut })
+            if (error) {
+                throw error;
+            }
+            rows = data;
         }
         // TODO we probably don't need to do the final select after the insert
         // since we should get an error if the insert failed for any reason.
         // so the final select plust the following check is probably unecessary.
-        const hashesInserted = new Set(rows.map((row) => row[DEFAULT_OBJECT_KEY_COL]));
-        if (sha1sAlreadyPut.size + hashesInserted.size !== deduped.length) {
-            throw new Error(
-                "The number of objects put + the number of objects that " +
-                "were already in the store " + 
-                `(${hashesInserted.size}+${sha1sAlreadyPut.size}` +
-                `=${sha1sAlreadyPut.size + hashesInserted.size}) should equal ` +
-                `the deduped number of objects passed to putJsons(${deduped.length}).`
-            );
-        }
+        //const hashesInserted = new Set(rows?.map(row => row[DEFAULT_OBJECT_KEY_COL]));
+        //if (sha1sAlreadyPut.size + hashesInserted.size !== deduped.length) {
+        //    throw new Error(
+        //        `The number of objects put (${hashesInserted.size}) + the number of objects that ` +
+        //        `were already in the store (${sha1sAlreadyPut.size}) ` +
+        //        `(${hashesInserted.size}+${sha1sAlreadyPut.size}` +
+        //        `=${sha1sAlreadyPut.size + hashesInserted.size}) should equal ` +
+        //        `the deduped number of objects passed to putJsons(${deduped.length}).`
+        //    );
+        //}
         return sha1sAndObjs;
     }
 
@@ -2052,6 +2095,7 @@ class SupabaseVarStore extends VarStore {
                 name: string;
                 namespace: string | null;
                 [DEFAULT_VARIABLES_OBJECT_KEY_COL]: string;
+                subscription_uuid: string;
             }>(
                 "postgres_changes",
                 {
@@ -2084,7 +2128,8 @@ class SupabaseVarStore extends VarStore {
                             payload.old["name"],
                             payload.old["namespace"],
                             payload.old[DEFAULT_VARIABLES_OBJECT_KEY_COL],
-                            payload.new[DEFAULT_VARIABLES_OBJECT_KEY_COL]
+                            payload.new[DEFAULT_VARIABLES_OBJECT_KEY_COL],
+                            payload.new["subscription_uuid"]
                         );
                     }
                 }
@@ -2162,11 +2207,15 @@ class SupabaseVarStore extends VarStore {
         name: string,
         namespace: string | null,
         oldSha1: string,
-        newSha1: string
+        newSha1: string,
+        subscriptionUUID?: string
     ): Promise<boolean> {
         let queryBuilder = this.supabaseClient
             .from(this.varsTableName)
-            .update({ [DEFAULT_VARIABLES_OBJECT_KEY_COL]: newSha1 })
+            .update({
+                [DEFAULT_VARIABLES_OBJECT_KEY_COL]: newSha1,
+                subscription_uuid: subscriptionUUID
+            })
             .eq("name", name)
             .eq(DEFAULT_VARIABLES_OBJECT_KEY_COL, oldSha1);
         // use "is" to test against null and "eq" for non-null.
@@ -2195,7 +2244,13 @@ class SupabaseVarStore extends VarStore {
         return false;
     }
 
-    async deleteVar(name: string, namespace: string | null): Promise<boolean> {
+    // TODO: implement 2 stage deletinng. use a deleted flag to allow undeleting
+    // vars, and a separate way to subsequently permanently delete vars.
+    async deleteVar(
+        name: string,
+        namespace: string | null,
+        subscriptionUUID?: string
+    ): Promise<boolean> {
         let queryBuilder = this.supabaseClient
             .from(this.varsTableName)
             .delete()
@@ -2720,8 +2775,8 @@ export class Var extends VarBase {
         update to the backing database.
         By default a Var is subscribed to Supabase postgres updates to the var.
     */
-    #__jsosAutoPullUpdates: boolean; // accessed via getter/setter that also updates __jsosSubscriptionID.
-    #__jsosSubscriptionID: string | null; // accessed via getter/set based on state of __autoPullUpdates.
+    __private_jsosAutoPullUpdates: boolean; // accessed via getter/setter that also updates __jsosSubscriptionID.
+    __private_jsosSubscriptionID: string | null; // accessed via getter/set based on state of __autoPullUpdates.
 
     constructor(
         name: string,
@@ -2733,8 +2788,8 @@ export class Var extends VarBase {
         parentVal?: Val
     ) {
         super(name, namespace, jsosVal, object, varStore, parentVal);
-        this.#__jsosAutoPullUpdates = autoPullUpdates;
-        this.#__jsosSubscriptionID = null;
+        this.__private_jsosAutoPullUpdates = autoPullUpdates;
+        this.__private_jsosSubscriptionID = null;
 
         return new Proxy(this, {
             get: (target, prop, receiver) => {
@@ -2787,8 +2842,8 @@ export class Var extends VarBase {
 
     set __jsosAutoPullUpdates(newVal: boolean) {
         // when newVal === this.#__jsosAutoPullUpdates, this is a no-op.
-        if (newVal && !this.#__jsosAutoPullUpdates) {
-            this.#__jsosSubscriptionID = this.__jsosVarStore.subscribeToUpdates(
+        if (newVal && !this.__private_jsosAutoPullUpdates) {
+            this.__private_jsosSubscriptionID = this.__jsosVarStore.subscribeToUpdates(
                 this.__jsosName,
                 this.__jsosNamespace,
                 async (
@@ -2815,15 +2870,15 @@ export class Var extends VarBase {
                     await this.__private_jsosPointToNewVal(newSha1);
                 }
             );
-        } else if (!newVal && this.#__jsosAutoPullUpdates) {
-            if (!this.#__jsosSubscriptionID) {
+        } else if (!newVal && this.__private_jsosAutoPullUpdates) {
+            if (!this.__private_jsosSubscriptionID) {
                 throw Error(
                     "Var is not subscribed to updates but should be because subscription " +
                         "is decided by the value(and getter / setter) of #__jsosAutoPullUpdates."
                 );
             }
             const unsubSuccess = this.__jsosVarStore.unsubscribeFromUpdates(
-                this.#__jsosSubscriptionID
+                this.__private_jsosSubscriptionID
             );
             if (!unsubSuccess) {
                 throw Error(
@@ -2833,13 +2888,13 @@ export class Var extends VarBase {
                         "turn __autoPullUpdates to fals while this Var was subscribed."
                 );
             }
-            this.#__jsosSubscriptionID = null;
+            this.__private_jsosSubscriptionID = null;
         }
-        this.#__jsosAutoPullUpdates = newVal;
+        this.__private_jsosAutoPullUpdates = newVal;
     }
 
     get __jsosSubscriptionID(): string | null {
-        return this.#__jsosSubscriptionID;
+        return this.__private_jsosSubscriptionID;
     }
 
     async __jsosSet(newVal: any): Promise<boolean> {
@@ -2864,7 +2919,8 @@ export class Var extends VarBase {
                 this.__jsosName,
                 this.__jsosNamespace,
                 oldVal.__jsosSha1,
-                newVal.__jsosSha1
+                newVal.__jsosSha1,
+                this.__private_jsosSubscriptionID || undefined
             );
             if (updateVarRes) {
                 this.__jsosVal = newVal;
@@ -2958,8 +3014,8 @@ class ImmutableVar extends VarBase {
         });
     }
 
-    async __jsosSet(newVal: any): Promise<this> {
-        return this.__jsosUpdate((_) => newVal);
+    async __jsosSet(newVal: any, subscriptionUUID?: string): Promise<this> {
+        return this.__jsosUpdate((_) => newVal, subscriptionUUID);
     }
 
     async __jsosSetIn(
@@ -2972,7 +3028,7 @@ class ImmutableVar extends VarBase {
     // Returns this if update failed, else returns new Var object with updated
     // Val.
     async __jsosUpdate(
-        updateFn: AsyncValUpdateFn | SyncValUpdateFn
+        updateFn: AsyncValUpdateFn | SyncValUpdateFn, subscriptionUUID?: string
     ): Promise<this> {
         const oldVal = this.__jsosVal;
         const newVal = await oldVal.__jsosUpdate(updateFn);
@@ -2981,7 +3037,8 @@ class ImmutableVar extends VarBase {
                 this.__jsosName,
                 this.__jsosNamespace,
                 oldVal.__jsosSha1,
-                newVal.__jsosSha1
+                newVal.__jsosSha1,
+                subscriptionUUID
             );
             if (updateVarRes) {
                 return new ImmutableVar(
