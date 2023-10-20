@@ -24,6 +24,8 @@ const useVar = (
     });
     const [localVarObj, setLocalVarObj] = React.useState<any>(defaultVal);
     const [subscrID, setSubscrID] = React.useState<string | null>(null);
+    const [varUpdateQueue, setVarUpdateQueue] = React.useState<any[]>([]);
+    const [updatePending, setUpdatePending] = React.useState<boolean>(false);
 
     React.useEffect(() => {
         if (options?.supabaseClient) {
@@ -68,6 +70,49 @@ const useVar = (
     //    setLocalVarObj(jsosVar?.Var?.__jsosVarObj);
     //}, [jsosVar]);
 
+    async function attemptApplyUpdates() {
+        if (varUpdateQueue.length === 0) {
+            return;
+        }
+        console.log("in attemptApplyUpdates(), updatePending: ", updatePending);
+        setUpdatePending(true);
+        const v = jsosVar["Var"];
+        console.log("varUpdateQueue: ", varUpdateQueue);
+        let updateWrapper = function (oldVal: any) {
+            console.log("in updateWrapper")
+            let newVal: any;
+            varUpdateQueue.forEach(updateValOrFn => {
+                if (typeof updateValOrFn === "function") {
+                    newVal = updateValOrFn(oldVal);
+                } else {
+                    newVal = updateValOrFn;
+                }
+            });
+            console.log("batched updates: ", newVal)
+            return newVal;
+        }
+        setJsosVar({ Var: await v.__jsosUpdate(updateWrapper, subscrID) });
+        setVarUpdateQueue([]);
+        setUpdatePending(false);
+    }
+
+    React.useEffect(() => {
+        console.log("varUpdateQueue changed: ", varUpdateQueue);
+        if (varUpdateQueue.length > 0) {
+            attemptApplyUpdates();
+        } else {
+            "varUpdateQueue changed and is empty"
+        }
+    }, [varUpdateQueue]);
+
+    React.useEffect(() => {
+        if (updatePending) {
+            console.log("updatePending, skipping attemptApplyUpdates");
+            return;
+        }
+        attemptApplyUpdates();
+    }, [updatePending]);
+
     async function updateVar(updateValOrFn: any) {
         const v = jsosVar["Var"];
         if (!v) {
@@ -78,13 +123,10 @@ const useVar = (
             console.log("skipping updateVar since {Var} is not a jsos Var ", v);
             return;
         }
-        if (typeof updateValOrFn === "function") {
-            console.log("about to update var via __jsosUpdate()")
-            setJsosVar({ Var: await v.__jsosUpdate(updateValOrFn, subscrID) });
-            console.log("done updating var via __jsosUpdate()")
-        } else {
-            setJsosVar({ Var: await v.__jsosUpdate(() => updateValOrFn) });
-        }
+        setVarUpdateQueue((oldQueue) => {
+            console.log("enqueuing updateValOrFn to varUpdateQueue");
+            return [...oldQueue, updateValOrFn];
+        });
     }
 
     return [localVarObj, updateVar];
