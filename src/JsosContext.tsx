@@ -56,6 +56,7 @@ export default function JsosContextProvider({
     defaultVal?: any;
     supabaseClient?: any;
 }) {
+    console.log("creating JsosContextProvider with name: ", name, " and namespace: ", namespace, " and supabaseClient: ", supabaseClient)
     const [appData, setAppData] = useVar(defaultVal, {
         name,
         namespace,

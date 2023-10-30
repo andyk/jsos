@@ -1,7 +1,7 @@
 import {
     SupabaseClient,
     RealtimeChannel,
-    RealtimePostgresUpdatePayload,
+    PostgrestError
 } from "@supabase/supabase-js";
 //import util from 'util'; // to overrride default string printed in node for a Var
 import { supaClientFromEnv } from "./supabase";
@@ -2055,6 +2055,21 @@ class SupabaseJsonStore extends JsonStore {
     }
 }
 
+class VarUpdateConflictError extends Error {
+    details?: string;
+
+    constructor(message: string, details?: string, hint?: string, code?: string) {
+        const newMsg = (
+            "Transaction failed due to conflict. Please pull, " +
+            "merge or resolve, and retry. Original error message: " + message
+        )
+        super(newMsg);
+        this.name = 'VarUpdateConflictError';
+        this.details = details
+
+    }
+}
+
 class SupabaseVarStore extends VarStore {
     supabaseClient: SupabaseClient;
     varsTableName: string;
@@ -2116,7 +2131,9 @@ class SupabaseVarStore extends VarStore {
                                 "Received an illegal update via supabase subscription: " +
                                     `Name and/or namespace changed. ${JSON.stringify(
                                         payload
-                                    )}`
+                                )}. ` + "If `old` doesn't contain full details, then you need "
+                                + "to run`alter table jsos_objs replica identity full` per "
+                                + "https://supabase.com/docs/guides/realtime/postgres-changes#receiving-old-records"
                             );
                         }
                         //console.log(
@@ -2224,7 +2241,12 @@ class SupabaseVarStore extends VarStore {
                 ? queryBuilder.is("namespace", namespace)
                 : queryBuilder.eq("namespace", namespace);
         const { data: row, error } = await queryBuilder.select().maybeSingle();
-        if (error) {
+        if (error)  {
+            if (error.code === "PGRST116") {
+                throw new VarUpdateConflictError(
+                    error.message, error.details, error.hint, error.code
+                )
+            }
             throw error;
         }
         if (row) {
@@ -2501,7 +2523,6 @@ export class JsosSession {
             callback: VarUpdateCallback;
         }
     ): string {
-        console.log("in jsossess subscribeToVar");
         return subscribeToVar({
             ...options,
             valStore: this.valStore,
@@ -2530,14 +2551,25 @@ export class JsosSession {
     }
 }
 
-// the default session.
-let jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
-try {
-    jsos = jsos.addSupabaseFromEnv()
-} catch {
-    console.log("failed to fetch supabase from env")
+// Setup the default session singleton.
+let jsos: JsosSession | null = null;
+
+export function getDefaultSession(): JsosSession {
+    if (jsos === null) {
+        console.log("creating default jsos session");
+        jsos = new JsosSession().addInMemory().addDefaultLocalStorage();
+        try {
+            jsos = jsos.addSupabaseFromEnv()
+        } catch {
+            console.log("failed to fetch supabase from env")
+        }
+    }
+    return jsos;
 }
-export default jsos;
+
+export default function getJsos() {
+    return getDefaultSession();
+}
 
 export class Val {
     readonly __jsosValStore: ValStore;

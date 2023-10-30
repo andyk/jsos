@@ -78,7 +78,7 @@ export const supaClientFromEnv = () => {
         supabaseEnvKey = process.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
         supabaseProjectUrl = process.env.SUPABASE_URL_JSOS;
     } catch (e) {
-        console.log("supabase env vars not found via process.env... ", e)
+        //console.log("supabase env vars not found via process.env... ", e)
     }
     try {
         supabaseEnvKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;

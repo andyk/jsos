@@ -1,4 +1,4 @@
-import jsos, { JsosSession, Val, Var, NewVal, getVar, newVar, getOrNewVar } from "./jsos";
+import { JsosSession, getDefaultSession, Val, Var, NewVal, getVar, newVar, getOrNewVar } from "./jsos";
 import JsosContextProvider, { useVarContext } from "./JsosContext";
 import JsosUI from "./JsosUI";
 import useVar from "./useVar";
@@ -6,6 +6,7 @@ import { createSupaClient } from "./supabase";
 
 export {
     JsosSession,
+    getDefaultSession,
     JsosContextProvider,
     useVarContext,
     useVar,
@@ -19,4 +20,6 @@ export {
     JsosUI,
 };
 
-export default jsos;
+export default function getJsos() {
+    return getDefaultSession();
+}
