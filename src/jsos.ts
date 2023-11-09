@@ -97,8 +97,8 @@ const VARIABLE_STR_KEY_PREFIX = "-#jVar";
 const STR_KEY_SEP = "-#-#-";
 const DEFAULT_OBJECTS_TABLE_NAME = "jsos_objects";
 const DEFAULT_VARIABLES_TABLE_NAME = "jsos_vars";
-const DEFAULT_OBJECT_KEY_COL = "hash";
-const DEFAULT_VARIABLES_OBJECT_KEY_COL = "val_hash";
+const DEFAULT_OBJECT_KEY_COL = "hash"; // primary key of jsos_objects table
+const DEFAULT_VARIABLES_OBJECT_KEY_COL = "val_hash"; // col in jsos_vars table that references object table
 
 // Re-using special strings for encoding immutables from
 // https://github.com/glenjamin/transit-immutable-js
@@ -1987,7 +1987,6 @@ class SupabaseJsonStore extends JsonStore {
         const resultMap: Map<string, Json | undefined> = new Map();
         sha1Array.forEach(sha1 => resultMap.set(sha1, retrievedHashMap.get(sha1) || undefined));
 
-        console.log("In SupabaseJsonStore getJsons, returning results ", JSON.stringify(Array.from(resultMap)));
         return sha1Array.map((sha1) => [sha1, retrievedHashMap.get(sha1)]);
     }
 
@@ -2424,8 +2423,14 @@ export class JsosSession {
         ).setVarStore(new SupabaseVarStore(supabaseClient));
     }
 
-    addSupabaseFromEnv(): JsosSession {
-        const supabaseClient = supaClientFromEnv();
+    addSupabaseFromEnv(
+        supabaseUrlEnvName?: string,
+        supabaseKeyEnvName?: string
+    ): JsosSession {
+        const supabaseClient = supaClientFromEnv(
+            supabaseUrlEnvName,
+            supabaseKeyEnvName
+        );
         return this.addJsonStore(
             new SupabaseJsonStore(supabaseClient)
         ).setVarStore(new SupabaseVarStore(supabaseClient));
@@ -2508,7 +2513,7 @@ export class JsosSession {
             namespace?: string;
             defaultVal: any;
         }
-    ): Promise<VarWrapper<T>> {
+    ): Promise<ImmutableVarWrapper<T>> {
         return getOrNewImmutableVar({
             ...options,
             valStore: this.valStore,

@@ -71,20 +71,30 @@ export const createSupaClient: CreateClientType = (
     );
 }
 
-export const supaClientFromEnv = () => {
-    let supabaseEnvKey;
+export const supaClientFromEnv = (
+        supabaseUrlEnvName?: string,
+        supabaseKeyEnvName?: string
+) => {
+    const urlEnvName = supabaseUrlEnvName || "SUPABASE_URL_JSOS" 
+    const keyEnvName = supabaseKeyEnvName || "SUPABASE_SERVICE_ROLE_KEY_JSOS"
     let supabaseProjectUrl;
-    try {
-        supabaseEnvKey = process.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
-        supabaseProjectUrl = process.env.SUPABASE_URL_JSOS;
-    } catch (e) {
-        //console.log("supabase env vars not found via process.env... ", e)
-    }
-    try {
-        supabaseEnvKey = import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS;
-        supabaseProjectUrl = import.meta.env.SUPABASE_URL_JSOS;
-    } catch (e) {
-        console.log("supabase env vars not found via import.meta.env... ", e)
+    let supabaseEnvKey;
+    const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
+
+    if (isNode) {
+        try {
+            supabaseProjectUrl = process.env[urlEnvName];
+            supabaseEnvKey = process.env[keyEnvName];
+        } catch (e) {
+            //console.log("supabase env vars not found via process.env... ", e)
+        }
+    } else {
+        try {
+            supabaseEnvKey = eval('import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS');
+            supabaseProjectUrl = eval('import.meta.env.SUPABASE_URL_JSOS');
+        } catch (e) {
+            console.log("supabase env vars not found via import.meta.env... ", e)
+        }
     }
     if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
         throw Error(

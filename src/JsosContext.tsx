@@ -49,19 +49,24 @@ export default function JsosContextProvider({
     namespace,
     defaultVal,
     supabaseClient,
+    overwriteExisting,
 }: {
     children: React.ReactNode;
     name: string;
     namespace?: string;
     defaultVal?: any;
     supabaseClient?: any;
+    overwriteExisting?: boolean;
 }) {
-    console.log("creating JsosContextProvider with name: ", name, " and namespace: ", namespace, " and supabaseClient: ", supabaseClient)
-    const [appData, setAppData] = useVar(defaultVal, {
-        name,
-        namespace,
-        supabaseClient,
-    });
+    const [appData, setAppData] = useVar(
+        defaultVal,
+        {
+            name,
+            namespace,
+            supabaseClient,
+            overwriteExisting,
+        }
+    );
     return (
         <VarContext.Provider value={[appData, setAppData]}>
             {children}
