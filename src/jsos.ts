@@ -2436,6 +2436,30 @@ export class JsosSession {
         ).setVarStore(new SupabaseVarStore(supabaseClient));
     }
 
+    async newVal<T extends NotUndefined>(
+        options: {
+            object: T;
+            valStore?: ValStore;
+        }
+    ): Promise<ValWrapper<T>> {
+        return newVal<T>({
+            ...options,
+            valStore: this.valStore,
+        });
+    }
+
+    async getVal(
+        options: {
+            sha1: string;
+            valStore?: ValStore;
+        }
+    ): Promise<Val | undefined> {
+        return getVal({
+            ...options,
+            valStore: this.valStore,
+        });
+    }
+
     async newVar<T extends NotUndefined>(
         options: {
             name: string;
@@ -2625,7 +2649,7 @@ export class Val {
         if (newValObj instanceof Promise) {
             newValObj = await newValObj;
         }
-        return await NewVal({
+        return await newVal({
             object: newValObj,
             valStore: this.__jsosValStore,
         });
@@ -2665,7 +2689,7 @@ type ImmutableVarWrapper<T> = T extends null
     ? ImmutableVar
     : (T extends infer U & Val ? U : T) & ImmutableVar;
 
-export async function NewVal<T extends NotUndefined>(
+export async function newVal<T extends NotUndefined>(
     options: {
         object: T;
         valStore?: ValStore;
@@ -2680,7 +2704,7 @@ export async function NewVal<T extends NotUndefined>(
 // Returns undefined if the Val is not found in the ValStore. It isn't a problem
 // to use undefined to mean "not found" because undefined is not a valid Val by
 // our semantic definition, i.e., undefined is not just a special type of val.
-export async function GetVal(
+export async function getVal(
     options: {
         sha1: string;
         valStore?: ValStore;
@@ -2730,7 +2754,7 @@ class VarBase {
         if (newSha1 === this.__jsosSha1) {
             return; // No-op.
         }
-        const newVal = await GetVal({
+        const newVal = await getVal({
             sha1: newSha1,
             valStore: this.__jsosVal.__jsosValStore,
         });
@@ -2825,7 +2849,8 @@ export class Var extends VarBase {
         parentVal?: Val
     ) {
         super(name, namespace, jsosVal, object, varStore, parentVal);
-        this.__private_jsosAutoPullUpdates = autoPullUpdates;
+        this.__private_jsosAutoPullUpdates = false
+        this.__jsosAutoPullUpdates = autoPullUpdates;
         this.__private_jsosSubscriptionID = null;
 
         return new Proxy(this, {
@@ -3115,7 +3140,7 @@ class ImmutableVar extends VarBase {
             this.__jsosNamespace
         );
         if (mostRecentSha1 && mostRecentSha1 !== this.__jsosSha1) {
-            const gotVal = await GetVal({
+            const gotVal = await getVal({
                 sha1: mostRecentSha1,
                 valStore: this.__jsosVal.__jsosValStore,
             });
@@ -3165,7 +3190,7 @@ export async function newVar<T extends NotUndefined>(
     if (val instanceof Val) {
         forSureAVal = val;
     } else {
-        forSureAVal = await NewVal({ object: val, valStore });
+        forSureAVal = await newVal({ object: val, valStore });
     }
     let obj: any = await forSureAVal.__jsosObjectCopy(false);
     const newVarRes = await varStore.newVar(
@@ -3211,7 +3236,7 @@ export async function newImmutableVar<T extends NotUndefined>(
     if (val instanceof Val) {
         forSureAVal = val;
     } else {
-        forSureAVal = await NewVal({ object: val, valStore });
+        forSureAVal = await newVal({ object: val, valStore });
     }
     let obj: any = await forSureAVal.__jsosObjectCopy(false);
     const newVarRes = await varStore.newVar(
@@ -3256,7 +3281,7 @@ export async function getVar<T>(
     if (valSha1 === undefined) {
         return undefined;
     }
-    const val = await GetVal({ sha1: valSha1, valStore });
+    const val = await getVal({ sha1: valSha1, valStore });
     if (!val) {
         throw Error(`Val with sha1 ${valSha1} not found in ValStore`);
     }
@@ -3290,7 +3315,7 @@ export async function getImmutableVar<T>(
     if (valSha1 === undefined) {
         return undefined;
     }
-    const val = await GetVal({ sha1: valSha1, valStore });
+    const val = await getVal({ sha1: valSha1, valStore });
     if (!val) {
         throw Error(`Val with sha1 ${valSha1} not found in ValStore`);
     }
@@ -3396,7 +3421,7 @@ export function subscribeToVar(
         name,
         namespace,
         async (name, namespace, oldSha1, newSha1) => {
-            const val = await GetVal({ sha1: newSha1, valStore });
+            const val = await getVal({ sha1: newSha1, valStore });
             if (!val) {
                 throw Error(`Val with sha1 ${newSha1} not found in ValStore`);
             }

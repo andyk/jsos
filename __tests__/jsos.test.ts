@@ -6,7 +6,7 @@ import {
     InMemoryJsonStore,
     InMemoryVarStore,
     VarStoreSubCallback,
-    NewVal,
+    newVal,
 } from "../src/jsos";
 import {
     OrderedMap,
@@ -128,11 +128,11 @@ test("VarStore basics", async () => {
 });
 
 test("Val basics", async () => {
-    const v0 = await NewVal({ object: null });
+    const v0 = await newVal({ object: null });
     expect(v0).toBeDefined();
     expect(v0.__jsosValObject).toBe(null);
     const init = [1, 2, 3];
-    const v1 = await NewVal({ object: init });
+    const v1 = await newVal({ object: init });
     expect(v1.__jsosValObject).toEqual(init);
     expect(v1[0]).toBe(1);
     expect(v1[2]).toBe(3);
@@ -145,13 +145,13 @@ test("Val basics", async () => {
     expect(updated.__jsosValObject).toEqual([1, 2, 3, 4]);
     expect(v1.__jsosSha1).not.toBe(updated.__jsosSha1);
 
-    const strVal: any = await NewVal({ object: "a string" });
+    const strVal: any = await newVal({ object: "a string" });
     const newStr = await strVal.__jsosUpdate(
         (oldVal: string) => oldVal + " with more"
     );
     expect(newStr.__jsosValObject).toBe("a string with more");
 
-    const boolVal: any = await NewVal({ object: true });
+    const boolVal: any = await newVal({ object: true });
     const newBool = await boolVal.__jsosUpdate(
         (oldVal: boolean) => oldVal && false
     );
@@ -159,7 +159,7 @@ test("Val basics", async () => {
 }, 1000000);
 
 test("Val created from an object that has a simple function", async () => {
-    const val = await NewVal({
+    const val = await newVal({
         object: {
             a: 1,
             b: 2,
@@ -185,9 +185,10 @@ test("Val created from an object that has a simple function", async () => {
 describe('Creates (& cleans up) VarStore state against Supabase', () => {
     const jsos = new JsosSession().addInMemory().addSupabaseFromEnv();
     beforeEach(async () => {
-      await jsos.deleteVar({ name: "myNullTestVar" });
-      await jsos.deleteVar({ name: "myTestVar" });
-      await jsos.deleteVar({ name: "myTestVar2" });
+        console.log("cleaning up in beforeEach");
+        await jsos.deleteVar({ name: "myNullTestVar" });
+        await jsos.deleteVar({ name: "myTestVar" });
+        await jsos.deleteVar({ name: "myTestVar2" });
     }, 1000000);
 
     function sleep(ms: number) {
@@ -211,7 +212,7 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         //})).rejects.toThrow();
         const v3 = await jsos.newVar({
             name: "myTestVar2",
-            val: await NewVal({ object: [1, 2, 3] })
+            val: await jsos.newVal({ object: [1, 2, 3] })
         });
         expect(v3).toBeDefined();
         expect(v3.__jsosSha1).toEqual(v1.__jsosSha1);
@@ -228,7 +229,7 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         // i think Jest is mucking with filesystem flushing so that
         // the VarStore subscriptions aren't working as expected
         // when using FileSystemVarStore.
-        await sleep(1000); // With supabase, 500ms wasn't enough time.
+        //await sleep(1000); // With supabase, 500ms wasn't enough time.
         //expect(v2.length).toBe(4);
         //const v4 = await GetOrNewVar({
         //    name: "appData",
@@ -241,12 +242,12 @@ describe('Creates (& cleans up) VarStore state against Supabase', () => {
         const w = await jsos.newVar({ name: "myTestVar", val: [1, 2, 3] });
         const otherW = await jsos.getVar<typeof w>({ name: "myTestVar", autoPullUpdates: false });
         w[0] = 100;
-        await sleep(200);
+        await sleep(600);
         expect(otherW).toBeDefined();
         if (otherW) { // Typeguard
             expect(otherW[0]).toBe(1);
             await otherW.__jsosPull();
-            await sleep(200);
+            await sleep(600);
             expect(otherW[0]).toBe(100);
         }
     });
