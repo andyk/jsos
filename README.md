@@ -1,7 +1,7 @@
 # JSOS (Javascript Object Store)
 ## Object Persistence for JavaScript
 
-JSOS (JavaScript Object Store) is a framework for tranparent object persistence, and sharing.
+JSOS (JavaScript Object Store) is a framework for transparent object persistence, and sharing.
 
 **Install**
 ```
