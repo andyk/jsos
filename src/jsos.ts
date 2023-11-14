@@ -2508,7 +2508,7 @@ export class JsosSession {
             name: string;
             namespace?: string;
         }
-    ): Promise<VarWrapper<T> | undefined> {
+    ): Promise<ImmutableVarWrapper<T> | undefined> {
         return getImmutableVar({
             ...options,
             valStore: this.valStore,
@@ -3022,16 +3022,12 @@ export class Var extends VarBase {
         return false;
     }
 }
-//const customInspectSymbol = Symbol.for('nodejs.util.inspect.custom');
-//(Var as any).prototype[customInspectSymbol] = function (depth: number, options: any) {
-//    return util.inspect(this.__jsosVarObj, options);
-//}
 
 class ImmutableVar extends VarBase {
-    // ImmutableVar is essentially an named Val. It is a snapshot of
-    // the mapping between a name/namespace & a hash of a Val.
-    // Note that for this abstraaction, the immutability is only enforced on the client side,
-    // i.e., while this object is immutable, the var tuple is not necesssarily immutable in the VarStore,
+    // A var with immutable semantics, i.e. API calls that cause undelying state
+    // to change return a new object instead of mutating state in-situ.
+    // However, the changes are pushed to the VarStore.
+    // TODO: support a const bit that lives in the VarStore.
 
     constructor(
         name: string,
@@ -3304,7 +3300,7 @@ export async function getImmutableVar<T>(
         valStore?: ValStore;
         varStore?: VarStore;
     }
-): Promise<VarWrapper<T> | undefined> {
+): Promise<ImmutableVarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
