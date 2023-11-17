@@ -5,7 +5,7 @@ import * as path from 'path';
 interface SyncVarParams {
     varName: string;
     varNamespace?: string;
-    supabaseUrlEnvName?: string;
+    supabaseurlenvname?: string;
     supabaseKeyEnvName?: string;
 }
 

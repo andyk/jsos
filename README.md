@@ -71,8 +71,15 @@ Supports the following types of Javascript... "things":
 To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
 ## Using Supabase
-To use Supabase as a backend for Jsos, you need to set up
-a Supabase project that has the two simple tables: `jsos_objects` and `jsos_vars` with the schemas as follows:
+To use Supabase as a backend for Jsos, you need to
+
+1. Create 2 tables: one for the "vals" (map from hash to json object) and one for the "vars" (map from name, namespace to hash).
+2. Set up RPC's (i.e. create postgres functions) that allow for batched reads/writes of "vals".
+3. Increase the API row limit from 1000 (till we implement pagination)
+4. Set environment variables
+
+### Set up the necessary tables
+Set up a Supabase project that has the two simple tables: `jsos_objects` and `jsos_vars` with the schemas as follows:
 
 ```
 create table
@@ -93,14 +100,78 @@ create table
   ) tablespace pg_default;
 ```
 
-Once those tables exist, the easiest way to have Jsos connect to Supabase (and use it as a JsonStore) is to set the following environment variables (which you can find under
+### Set up RPC's (i.e. create postgres functions)
+running the following commands in postgres will create functions that JSOS uses for batched reads/writes of "vals"
+
+#### Create put_jsons
+
+```
+-- If you end up re-runing this command, comment this line out the second time
+CREATE TYPE jsos_object_type AS (hash TEXT, json JSON);
+
+CREATE OR REPLACE FUNCTION put_jsons(objects jsos_object_type[])
+RETURNS SETOF jsos_objects AS $$
+DECLARE
+    object_record jsos_object_type;
+    i INT;
+BEGIN
+    FOR i IN array_lower(objects, 1) .. array_upper(objects, 1)
+    LOOP
+        object_record := objects[i];
+
+        INSERT INTO jsos_objects(hash, json) 
+        VALUES (object_record.hash, object_record.json)
+        ON CONFLICT (hash) DO NOTHING;  -- or DO UPDATE if you want to handle duplicates
+    END LOOP;
+    
+    RETURN QUERY
+    SELECT hash, json FROM jsos_objects WHERE hash IN (SELECT unnest.hash FROM unnest(objects) AS unnest);
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### Create get_hashes
+
+```
+CREATE OR REPLACE FUNCTION get_hashes(hashes text[]) 
+RETURNS SETOF text AS $$
+BEGIN
+  RETURN QUERY
+  SELECT hash FROM jsos_objects
+  WHERE hash = ANY(hashes);
+END;
+$$ LANGUAGE plpgsql;
+```
+
+#### Create get_jsons
+
+```
+create or replace function get_jsons(hashes text[]) returns setof jsos_objects as $$
+  select hash, json from jsos_objects
+  where hash = any(hashes);
+$$ language sql;
+```
+
+### Increase the API row limit from 1000 (till we implement pagination)
+The max rows returned at one time from supabase API is limited by
+a use configurable setting (within "API settings"), and the default is
+1000. This will break large requests here. We should add pagination
+but for now we will just increase that setting to 100,000.
+
+This limit is documented in the supabase docs for the (`select` API)[https://supabase.com/docs/reference/javascript/select]
+but it is also seems to apply to the RPC API.
+
+The setting can be changed in Supbase web UI in the "API" setting box of the project.
+
+### Set environment variables
+The easiest way to have Jsos connect to Supabase (and use it as a JsonStore) is to set the following environment variables (which you can find under
 "Project Settings" > "API"):
 
 ```
 # You can set these in your ~/.profile to always have them available
 # in your shell env.
-SUPABASE_SERVICE_ROLE_KEY_JSOS="copy and paste from supabase"
-SUPABASE_URL_JSOS="copy and paste from supabase"
+SUPABASE_SERVICE_ROLE_KEY_JSOS="copy and paste from supabase web UI"
+SUPABASE_URL_JSOS="copy and paste from supabase web UI"
 ```
 
 If those env vars are set, then in node the SupabaseJsonStore should

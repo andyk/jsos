@@ -1047,9 +1047,10 @@ export class ValStore {
                 (_, index) => gotJsons[index] === undefined
             );
             throw Error(
-                "Did not successfully get all normalized objects in manifest " +
-                    "from JsonStore. Failed to get the following sha1s: " +
-                    failedSha1s
+                "Did not successfully get all normalized objects in manifest. " +
+                    `Expected ${manifest.length} but got ${successfulFetches.length}. ` +
+                    `gotJsons.length: ${gotJsons.length}. ` +
+                    `from JsonStore. Failed to get the following sha1s: ${failedSha1s}.`
             );
         }
         const withKeys: Array<[string, NormalizedJson]> = successfulFetches.map(
@@ -1971,6 +1972,10 @@ class SupabaseJsonStore extends JsonStore {
         //    .from(this.objectsTableName)
         //    .select(`${DEFAULT_OBJECT_KEY_COL}, json`)
         //    .in(DEFAULT_OBJECT_KEY_COL, sha1Array);
+        // NOTE: The max rows returned at one time is limited in supabase by
+        // a use configurable setting (within "API settings"), and the default is
+        // 1000. This will break large requests here. We should add pagination
+        // but for now we will just increase that setting to 100,000. 11/17/23
         const { data, error }: { data: null | { [DEFAULT_OBJECT_KEY_COL]: string, json: string }[], error: any } = await this.supabaseClient
             .rpc('get_jsons', { hashes: sha1Array });
 
@@ -2302,23 +2307,24 @@ class SupabaseVarStore extends VarStore {
     }
 }
 
-const DEFAULT_VAL_STORE_LIST: Array<JsonStore> = [];
-DEFAULT_VAL_STORE_LIST.push(new InMemoryJsonStore());
-if (typeof window !== "undefined") {
-    DEFAULT_VAL_STORE_LIST.push(new BrowserIndexedDBJsonStore());
-} else {
-    DEFAULT_VAL_STORE_LIST.push(new FileBackedJsonStore());
-}
-const DEFAULT_VAL_STORE = new ValStore(
-    new MultiJsonStore(DEFAULT_VAL_STORE_LIST)
-);
-
-let DEFAULT_VAR_STORE: VarStore;
-if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
-    DEFAULT_VAR_STORE = new BrowserLocalStorageVarStore();
-} else {
-    DEFAULT_VAR_STORE = new FileBackedVarStore();
-}
+// If we want to have an easy to use default, it should be setup outside of the core JSOS lib.
+//const DEFAULT_VAL_STORE_LIST: Array<JsonStore> = [];
+//DEFAULT_VAL_STORE_LIST.push(new InMemoryJsonStore());
+//if (typeof window !== "undefined") {
+//    DEFAULT_VAL_STORE_LIST.push(new BrowserIndexedDBJsonStore());
+//} else {
+//    DEFAULT_VAL_STORE_LIST.push(new FileBackedJsonStore());
+//}
+//const DEFAULT_VAL_STORE = new ValStore(
+//    new MultiJsonStore(DEFAULT_VAL_STORE_LIST)
+//);
+//
+//let DEFAULT_VAR_STORE: VarStore;
+//if (typeof window !== "undefined" && typeof localStorage !== "undefined") {
+//    DEFAULT_VAR_STORE = new BrowserLocalStorageVarStore();
+//} else {
+//    DEFAULT_VAR_STORE = new FileBackedVarStore();
+//}
 
 // Immutable builder pattern entry point to using Jsos loosely inspired by
 // Apache Spark's SparkSession.
@@ -2692,10 +2698,10 @@ type ImmutableVarWrapper<T> = T extends null
 export async function newVal<T extends NotUndefined>(
     options: {
         object: T;
-        valStore?: ValStore;
+        valStore: ValStore;
     }
 ): Promise<ValWrapper<T>> {
-    const { object, valStore = DEFAULT_VAL_STORE } = options;
+    const { object, valStore } = options;
     const [sha1, __] = await valStore.putVal(object);
     const putVal = await valStore.getVal(sha1);
     return new Val(putVal, sha1, valStore) as ValWrapper<T>;
@@ -2707,10 +2713,10 @@ export async function newVal<T extends NotUndefined>(
 export async function getVal(
     options: {
         sha1: string;
-        valStore?: ValStore;
+        valStore: ValStore;
     }
 ): Promise<Val | undefined> {
-    const { sha1, valStore = DEFAULT_VAL_STORE } = options;
+    const { sha1, valStore } = options;
     const obj = await valStore.getVal(sha1);
     if (obj === undefined) {
         return undefined;
@@ -3169,8 +3175,8 @@ export async function newVar<T extends NotUndefined>(
         name: string;
         namespace?: string;
         val: T;
-        valStore?: ValStore;
-        varStore?: VarStore;
+        valStore: ValStore;
+        varStore: VarStore;
         autoPullUpdates?: boolean;
     }
 ): Promise<VarWrapper<T>> {
@@ -3178,8 +3184,8 @@ export async function newVar<T extends NotUndefined>(
         name,
         namespace = null,
         val,
-        valStore = DEFAULT_VAL_STORE,
-        varStore = DEFAULT_VAR_STORE,
+        valStore,
+        varStore,
         autoPullUpdates = true,
     } = options;
     let forSureAVal: Val;
@@ -3217,16 +3223,16 @@ export async function newImmutableVar<T extends NotUndefined>(
         name: string;
         namespace?: string;
         val: T;
-        valStore?: ValStore;
-        varStore?: VarStore;
+        valStore: ValStore;
+        varStore: VarStore;
     }
 ): Promise<ImmutableVarWrapper<T>> {
     const {
         name,
         namespace = null,
         val,
-        valStore = DEFAULT_VAL_STORE,
-        varStore = DEFAULT_VAR_STORE,
+        valStore,
+        varStore,
     } = options;
     let forSureAVal: Val;
     if (val instanceof Val) {
@@ -3261,16 +3267,16 @@ export async function getVar<T>(
     options: {
         name: string;
         namespace?: string;
-        valStore?: ValStore;
-        varStore?: VarStore;
+        valStore: ValStore;
+        varStore: VarStore;
         autoPullUpdates?: boolean;
     }
 ): Promise<VarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
-        valStore = DEFAULT_VAL_STORE,
-        varStore = DEFAULT_VAR_STORE,
+        valStore,
+        varStore,
         autoPullUpdates = true,
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
@@ -3297,15 +3303,15 @@ export async function getImmutableVar<T>(
     options: {
         name: string;
         namespace?: string;
-        valStore?: ValStore;
-        varStore?: VarStore;
+        valStore: ValStore;
+        varStore: VarStore;
     }
 ): Promise<ImmutableVarWrapper<T> | undefined> {
     const {
         name,
         namespace = null,
-        valStore = DEFAULT_VAL_STORE,
-        varStore = DEFAULT_VAR_STORE,
+        valStore,
+        varStore,
     } = options;
     const valSha1 = await varStore.getVar(name, namespace);
     if (valSha1 === undefined) {
@@ -3330,8 +3336,8 @@ export async function getOrNewVar(
         name: string;
         namespace?: string;
         defaultVal: any;
-        varStore?: VarStore;
-        valStore?: ValStore;
+        varStore: VarStore;
+        valStore: ValStore;
         autoPullUpdates?: boolean;
     }
 ) {
@@ -3339,8 +3345,8 @@ export async function getOrNewVar(
         name,
         namespace,
         defaultVal,
-        varStore = DEFAULT_VAR_STORE,
-        valStore = DEFAULT_VAL_STORE,
+        varStore,
+        valStore,
         autoPullUpdates,
     } = options;
     const gotVaR = await getVar({
@@ -3368,16 +3374,16 @@ export async function getOrNewImmutableVar(
         name: string;
         namespace?: string;
         defaultVal: any;
-        varStore?: VarStore;
-        valStore?: ValStore;
+        varStore: VarStore;
+        valStore: ValStore;
     }
 ) {
     const {
         name,
         namespace,
         defaultVal,
-        varStore = DEFAULT_VAR_STORE,
-        valStore = DEFAULT_VAL_STORE,
+        varStore,
+        valStore,
     } = options;
     const gotVaR = await getImmutableVar({
         name,
@@ -3402,16 +3408,16 @@ export function subscribeToVar(
         name: string;
         namespace?: string;
         callback: VarUpdateCallback;
-        varStore?: VarStore;
-        valStore?: ValStore;
+        varStore: VarStore;
+        valStore: ValStore;
     }
 ): string {
     const {
         name,
         namespace = null,
         callback,
-        varStore = DEFAULT_VAR_STORE,
-        valStore = DEFAULT_VAL_STORE,
+        varStore,
+        valStore,
     } = options;
     return varStore.subscribeToUpdates(
         name,
@@ -3437,10 +3443,10 @@ export function subscribeToVar(
 export function unsubscribeFromVar(
     options: {
         subscriptionID: string,
-        varStore?: VarStore
+        varStore: VarStore
     }
 ): boolean {
-    const varStoreToUse = options.varStore || DEFAULT_VAR_STORE;
+    const varStoreToUse = options.varStore;
     return varStoreToUse.unsubscribeFromUpdates(options.subscriptionID);
 }
 
@@ -3448,9 +3454,9 @@ export async function deleteVar(
     options: {
         name: string;
         namespace?: string;
-        varStore?: VarStore;
+        varStore: VarStore;
     }
 ): Promise<boolean> {
-    const { name, namespace = null, varStore = DEFAULT_VAR_STORE } = options;
+    const { name, namespace = null, varStore } = options;
     return await varStore.deleteVar(name, namespace);
 }
