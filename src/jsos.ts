@@ -33,9 +33,21 @@ import { createStore, get, set, del } from "./idbKeyVal";
 =================== JSOS - Key Abstractions =================
 =============================================================
 
-== JVal ==
-The type of objects that this library handles: including aribrarily nested 
-arrangements of any Json types or Immutable.Collections
+== Overview ==
+JSOS is a library for storing and retrieving Javascript objects in various
+types of backend key-val stores. It is designed to be used in the browser and in
+Node.js.
+
+It is efficient as it uses sha1 hashes to store objects in a way that
+prevents duplication of data and allows for efficient local/hierarchical caching.
+It also auto-normalizes objects to make it much more efficent to work with large
+nested objects (if a subset of the object is changed, then only the changed parts
+plus the path between the changed part and the root ancestor object need to be
+updated and pushed).
+
+It also supports more types of Javascript types than vanilla JSON, including Date,
+Regex, and immmutable-js collections.
+
 
 == getSha1() ==
 returns the hash of an object, which is always used as an address in ValStores
@@ -1044,13 +1056,14 @@ export class ValStore {
         );
         if (successfulFetches.length !== manifest.length) {
             const failedSha1s = manifest.filter(
-                (_, index) => gotJsons[index] === undefined
+                (_, index) => gotJsons[index] === undefined || gotJsons[index] === null
             );
             throw Error(
                 "Did not successfully get all normalized objects in manifest. " +
                     `Expected ${manifest.length} but got ${successfulFetches.length}. ` +
                     `gotJsons.length: ${gotJsons.length}. ` +
-                    `from JsonStore. Failed to get the following sha1s: ${failedSha1s}.`
+                    `You may need to increase the Supabase API row limit (default is 1000). ` +
+                    `Failed to get the following sha1s: ${failedSha1s}.`
             );
         }
         const withKeys: Array<[string, NormalizedJson]> = successfulFetches.map(
