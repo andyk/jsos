@@ -2248,7 +2248,7 @@ class SupabaseVarStore extends VarStore {
             .from(this.varsTableName)
             .update({
                 [DEFAULT_VARIABLES_OBJECT_KEY_COL]: newSha1,
-                subscription_uuid: subscriptionUUID
+                subscription_uuid: subscriptionUUID || null,
             })
             .eq("name", name)
             .eq(DEFAULT_VARIABLES_OBJECT_KEY_COL, oldSha1);
