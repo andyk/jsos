@@ -1,7 +1,7 @@
 {
   "name": "@andykon/jsos",
   "version": "0.1.4",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/andyk/jsos.git"
