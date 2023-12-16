@@ -2430,8 +2430,10 @@ export class JsosSession {
             typeof window !== "undefined" &&
             typeof localStorage !== "undefined"
         ) {
+            console.log("adding BrowserLocalStorage")
             return this.addBrowserLocalStorage();
         } else {
+            console.log("adding FileSystemStorage")
             return this.addFileSystemStorage();
         }
     }

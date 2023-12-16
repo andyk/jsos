@@ -40,7 +40,7 @@ const useVar = (
         let initSess: JsosSession;
         if (options?.supabaseClient) {
             console.log("initializing initSess from provided supabaseClient");
-            initSess = new JsosSession().addInMemory().addDefaultLocalStorage().addSupabase(options.supabaseClient);
+            initSess = new JsosSession().addInMemory().addBrowserLocalStorage().addSupabase(options.supabaseClient);
         } else {
             initSess = getDefaultSession();
         }

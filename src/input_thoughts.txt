@@ -1,0 +1,181 @@
+I want to add support for classes to jsos
+I added support for prototype chains and all all properties regardless of enumerable or other property descriptor status so that constructors would get added since object.__proto__.constructor is non-enerable 
+I'm going to walk to Republik and work from there this morning
+Beth texted to say that Eve is sick and Kelly is going to pick her up from school
+oh yeah excited about remzi meeting
+I'm going to walk home because Kelly might leave sibs she is pregnant and she told us she doesn't want to watch when the girls have fevers
+i should work on my slide for remzi but
+Kelly just walked out the door, leaving early because Eve has fever
+I'm going to propose to Beth that we take shifts so we can stop get a little work done
+I want to work on headlong and making my list if example thoughts but I want to finish this jsos feature first 
+I talked to beth and I'm going to take the first shift
+i'm playing with eve and
+It is about 3pm so time to decide where we will get food tonight
+I'm going to Beth to ask where she wants to get food
+Hypothesis: if I understand JavaScript classes and prototypes better I can finish this feature 
+I got it working, now going to commit to GitHub and go to bed
+I'm not quite tired so going to update Fortnite on my pink laptop
+Open laptop and update Epic software so that fortnite updates
+I'm going to Brush my teeth before bed
+i'm brushing my teeth
+i'm going to bed now
+It's time to get up 
+I normally get up at 7am to take care of eves morning routine 
+Today is Saturday so no school for Eve
+Today I might meet with Andrew about Laude
+Going to play with eve for the morning
+Angel will arrive around noon
+
+I'm leaving for dinner
+We have to decide if we are going to drive or uber
+We are going to drive instead of Uber
+Our reservation is at 645
+I'm in bed but don't feel tired, should i watch TV?
+i am going to watch tv
+i have to pick which show to watch
+i'm going to try a new show silo on apple tv
+
+i should check what time it is since and also how long google maps things it will take me to get to the airport so that i know what time i need to leave for airport
+i'm going to take an uber
+it is 9:00am
+i need to order my uber now and i might still miss my flight
+im in my uber now on the way to BUR airport
+i'm running late so i might miss my flight
+i'm feeling a little bit of anxiety since if i miss my flight it might mean rearranging things with Pete who is planning on picking me up at SFO
+I'm flying to sfo because we have a meeting with sapphire to pitch them
+i have about 25min during this ride to do some work
+i'm going to take my laptop out of my bag and connect to the internet and catch up on my messages in signal with andrew
+
+today is my birthday
+my alarm is going off
+i should get out of bed and go get eve up
+today is sunday
+on sundays we normally have time with beth me and eve in the morning and then we have a few hours of beth-andy time to work or get a snack or take a nap or some other activity while angel has both girls
+beth left a birthday card for me on the arm of the couch next to my pillow
+i open the card and sit at the desk and read it
+i feel good and warm fuzzies
+i put the card down and look at my phone to see how eve is doing - see if she is awake
+
+today i'm going to fly to SF and then back home tonight - a daytrip
+pete texted in our group thread with Andrew "Andy I will swing by about 1145 and we can head to sf and try and find a place for a sandwich or something. Andrew will keep you posted"
+i'm on my flight now
+i'm going to buy internet which is $8 so that i can work and check my email
+i bought internet
+i'm going to work on doing my first fine-tuning
+i've been searching around to learn how to fine tune llama
+my plan is to generate enough training data myself which will be natural english in the format of stream of consciousness thoughts. kind of like a journal
+i have a couple pages of text that i can start with
+i found one person that blogged about using Axolotl which is an open source project that tries to make fine-tuning different types of LLMs easy
+yesterday i had tried to use a google collab notebook to run axolotl but didn't get it to work
+i also tried googling about finetuning on a macbook with apple silicon, but didn't find anything immediately to try
+i also read an anyscale blog post  https://www.anyscale.com/blog/fine-tuning-llama-2-a-comprehensive-case-study-for-tailoring-models-to-unique-applications about using ray to do finetuning with a project called Deepspeed and another called Accelerate along with other projects but i can't remember their names
+one of the tutorials i just read said that they considered using open ai finetraining but then decided to use 
+i need to process the free text format that i've been journaling in evernote into the structur
+we landed on time but now we are sitting on the runway, so far for 15min
+now we are moving to the gate
+they have started to deplane
+i'm going to text pete "Just getting off plane"
+i just texted that to pete
+but he might come too soon so i should tell him that i'm not off plane yet
+i'm going to text him that we are still on the plane
+i just texted "Ended up sitting on runway"
+i should see where he is at so that i know how much detail i need to be texting him
+I just texted pete "Where are you at now?"
+I just looked at my phone and he didn't start replying yet.
+he replied "I'm getting gas in San Bruno 3 mins away so just let me know where to meet you"
+
+it is almost time to head to berkeley with andrew to meet dave and kurt and armando
+we have a meeting set up for 5pm with them where we are joining their weekly wine and cheese social
+we will probably be leaving in the next 5min to get to berkeley on time
+i have to go pee
+can i wait till we get to berkeley?
+i'm going to check with my body
+how long will i have to wait? 
+from embarcadero to downtown usually takes 30-45 min to travel between
+my bladder says it could make it but i would be uncomfortable at the end probably
+i'm going to try to go now
+i say to pete and andrew "I have to use the bathroom before we leave"
+I say "i wonder where the bathroom is"
+andrew just said "there must be one up here somewhere"
+we are walking towards the bay side of the park on the path
+i'm looking around for signs about a bathroom or for the bathroom itslef
+i don't see any signs for the bathroom
+andrew points at a pillar that has symbols and arrows on it and says "that says bathroom"
+
+we are in andrews car, parking in berkeley now
+we are outside soda hall on the street that runs alongside soda
+i remember that this street is a steep hill on the part of the block that is next to soda
+i think this street is calld la conte or is it la loma?
+i used to live near here
+i remember when i used to park my motorcycle just up there
+
+andrew and i are sitting on the woz patio talking
+we are waiting for dave or armando or kurt to show up
+we are going to tell them the updates about csgv. that pete is joining and stuff
+our goal is to get them excited
+i'm feeling nervous
+i hope it goes well
+i feel confident about our messaging
+i want to update andrew about the headlong work i've shifted to working on in the last couple days
+i going to bring it up
+i said "have you tried fine-tuning an LLM yet?"
+andrew said "no"
+i said "i've been trying to do in the last couple days. i started by trying to fine tune llama but then i tried OpenAI and that was pretty easy.  they've abstracted everything so it's basically just a few api calls."
+andrew said "did the model perform well? could you tell you had fine tuned it?"
+I wasn't able to get it to work yet so i'm going to tell him that
+I said "i didn't get it working yet, need to generate more training data. the api for fine-tuning requires at least 10 example rows but i only have 3 so far"
+
+andrew pointed past me, to something behind me
+andrew said "there's dave now"
+i'm going to look at dave
+i twist my body turn my head to look
+i see dave pulling a cart in our direction
+i keep talking to andrew to try to finish my thought
+andrew stands up and it seems like he wants to pause the conversation
+so i pause mid-sentence and get up too
+we both walk towards dave
+i say "hey dave" and shake daves hand
+andrew says hi and dave says hi to us
+
+i wake up to my alarm at 6:45am
+i have a routine where i go in and get eve up around 7am
+i got eve up and we spent time playing and then did our morning routine
+i asked beth if she wants to go to get coffee
+she said yes 
+i wonder if she will wants to go to mandarin or republik
+we are leaving to walk to mandarin
+we need to put our shoes on, go out our door, walk down the hall, ride elevator down, walk outside to mandarin
+we are going down the elevator together
+i turned left in the carport
+beth said she assumed we are walking around because 
+we are talking about Angel and the package of hours we want to propose to her
+I look at my watch, it is 9:30
+beth is finished eating and we've been here almost an hour so its about time to wrap up and for us to start working soon
+beth is standing up, i give her a kiss and we part ways
+i'm walking up to republic
+i arrive at republik, i'm at republik coffee 
+i'm going to order food and then work
+i stand in line
+i ordered a pumpkin spice latte
+i feel a little guilty that i've violated my guidelines of skipping breakfast because this has sugar in it
+
+What am I going to do this morning?
+I should plan my week because it's Monday morning
+What are my big picture Objectives right now in my personal to do list?
+At the highest level, I've been working on two three things in two categories: (1) the business side: CSGV 2.0, (2) the research and dev side: jsos, headlong
+For csgv2.0 last week I was working on the Obama thread and pitching more strategic LPs
+later I have a meeting with kerner from MS for feedback on the pitch
+Also Andrew 1-1 where I want to go through OKRs
+And I'm meeting with JP Morgan at 11
+It's 1035 now so That meeting is in 25 minutes
+I'm walking to Republik now to get my morning coffee
+For the Technical side, Matei gave me feedback on jsos last week 
+That led me to want to add var references to support foreign key like relationships between vars 
+I'm at Republik now, getting into line
+ordering my coffee - hot latte
+i feel a lot better after i took my 70min nap after the handoff this mornign
+I'm going to sit down now
+observation: Dad texted me: "Good morning, I forgot to ask you about your Dr appointment the other day. What did your cardiologist have to say?"
+since this won't take super long, i'm just going to reply to dad right now instead of 
+action: text him back: "He said the ticker looks good. We are gonna keep me on my low dose beta blocker since it doesn't seem to be having any significant side effects"
+i should give some more details than that
