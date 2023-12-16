@@ -2433,8 +2433,8 @@ export class JsosSession {
             console.log("adding BrowserLocalStorage")
             return this.addBrowserLocalStorage();
         } else {
-            console.log("adding FileSystemStorage")
-            return this.addFileSystemStorage();
+            console.log("skip adding FileSystemStorage")
+            //return this.addFileSystemStorage();
         }
     }
 

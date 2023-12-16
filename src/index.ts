@@ -19,7 +19,3 @@ export {
     createSupaClient,
     JsosUI,
 };
-
-export default function getJsos() {
-    return getDefaultSession();
-}
