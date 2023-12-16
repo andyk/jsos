@@ -1,7 +1,6 @@
 import React from "react";
 import { Var, JsosSession, getDefaultSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
-import { last, set } from "lodash";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
 
