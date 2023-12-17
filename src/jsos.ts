@@ -4,7 +4,7 @@ import {
     PostgrestError
 } from "@supabase/supabase-js";
 //import util from 'util'; // to overrride default string printed in node for a Var
-import { supaClientFromEnv } from "./supabase";
+import { supaClientFromEnvNodeOnly } from "./supabase";
 import {
     Collection,
     List,
@@ -2448,7 +2448,7 @@ export class JsosSession {
         supabaseUrlEnvName?: string,
         supabaseKeyEnvName?: string
     ): JsosSession {
-        const supabaseClient = supaClientFromEnv(
+        const supabaseClient = supaClientFromEnvNodeOnly(
             supabaseUrlEnvName,
             supabaseKeyEnvName
         );

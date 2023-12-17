@@ -1,5 +1,5 @@
 import React from "react";
-import { Var, JsosSession, getDefaultSession } from "./jsos";
+import { Var, JsosSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;

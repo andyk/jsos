@@ -1,4 +1,5 @@
 import { createClient } from "@supabase/supabase-js";
+console.log("in jsos's supabase.ts")
 
 type CreateClientType = typeof createClient;
 
@@ -71,30 +72,24 @@ export const createSupaClient: CreateClientType = (
     );
 }
 
-export const supaClientFromEnv = (
+export const supaClientFromEnvNodeOnly = (
         supabaseUrlEnvName?: string,
         supabaseKeyEnvName?: string
 ) => {
+    const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
+    if (!isNode) {
+        throw Error("supaClientFromEnvBrowser only works in node.js");
+    }
+
     const urlEnvName = supabaseUrlEnvName || "SUPABASE_URL_JSOS" 
     const keyEnvName = supabaseKeyEnvName || "SUPABASE_SERVICE_ROLE_KEY_JSOS"
     let supabaseProjectUrl;
     let supabaseEnvKey;
-    const isNode = typeof process !== 'undefined' && process.versions != null && process.versions.node != null;
-
-    if (isNode) {
-        try {
-            supabaseProjectUrl = process.env[urlEnvName];
-            supabaseEnvKey = process.env[keyEnvName];
-        } catch (e) {
-            //console.log("supabase env vars not found via process.env... ", e)
-        }
-    } else {
-        try {
-            supabaseEnvKey = eval('import.meta.env.SUPABASE_SERVICE_ROLE_KEY_JSOS');
-            supabaseProjectUrl = eval('import.meta.env.SUPABASE_URL_JSOS');
-        } catch (e) {
-            console.log("supabase env vars not found via import.meta.env... ", e)
-        }
+    try {
+        supabaseProjectUrl = process.env[urlEnvName];
+        supabaseEnvKey = process.env[keyEnvName];
+    } catch (e) {
+        //console.log("supabase env vars not found via process.env... ", e)
     }
     if (supabaseEnvKey === undefined || supabaseProjectUrl === undefined) {
         throw Error(
