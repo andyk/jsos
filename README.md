@@ -72,6 +72,22 @@ Not supported:
 ## Quick Summary
 To get started, you can create a JSOS `Val` from your Javascript "thing" (which can be an object, class, primitive, data structure, etc.). For the things that support mutations (or transformations via an immutable-style interface)--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated `Val` is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
+## Architecture
+![jsos-architecture-v8-2023-12-23](https://github.com/andyk/jsos/assets/228998/9aad9738-d857-44f4-bcec-8b57db59bd22)
+
+## Core Abstractions
+* `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
+* `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put") and then read-then-deserialized-then-denormalized back to their original form (via a "get") for the user to interact with.
+  * We use content-based-hashing which allows for easy sharing of immutable state.
+  * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
+* `JsosSession` - an builder-style single entry point for composing VarStores + ValStore + JsonStores together and then using them to interact with (i.e.g put, read, delete, subscribe-to, etc.) `Var`s and `Val`s.
+* `VarStore` - A wrapper around a transactional tuple store that handles storing and concurrently reading/updating/deleting a mapping between a human readable name/namespace and a hash of the object which can be found in a ValStore or JsonStore. VarStores serve three main purposes:
+  1. give `Val`s human readable names
+  2. provide a mutable abstraction over top of an immutable one (i.e., `Val`s)
+  3. enable sharing of mutable state between multiple users (i.e., multiple users can co-edit a `Var`, each automatically receiving updates of the others changes).
+* `ValStore` - A key-value store and a wrapper around a JsonStore. ValStores handle \[de\]serializing (i.e., encoding more complex types down into pure JSON), as well as \[de\]normalizing (i.e., breaking out nested objects into their own entries in the JsonStore). This is useful for supporting objects that JSON doesn't handle natively, as well as for encoding objects in a way that is more efficient or performant (e.g., normalizing objects prevents lots of redundant information from being sent over the network when only a tiny portion of a large object is updated).
+* `JsonStore` - base class for wrappers around different object storage implementations (e.g., Filesystem, Browser IndexDB/LocalStorage, Postgres using JsonB column, etc.). These take JSON objects as keys and values and store them in the underlying key-value store using the hash of the JSON object as the key.
+
 ## Using Supabase
 To use Supabase as a backend for Jsos, you need to...
 
@@ -191,20 +207,3 @@ ValStore {
   }
 }
 ```
-## Architecture
-![jsos-architecture-v8-2023-12-23](https://github.com/andyk/jsos/assets/228998/9aad9738-d857-44f4-bcec-8b57db59bd22)
-
-
-## Core Abstractions
-* `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
-* `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put") and then read-then-deserialized-then-denormalized back to their original form (via a "get") for the user to interact with.
-  * We use content-based-hashing which allows for easy sharing of immutable state.
-  * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
-* `JsosSession` - an builder-style single entry point for composing VarStores + ValStore + JsonStores together and then using them to interact with (i.e.g put, read, delete, subscribe-to, etc.) `Var`s and `Val`s.
-* `VarStore` - A wrapper around a transactional tuple store that handles storing and concurrently reading/updating/deleting a mapping between a human readable name/namespace and a hash of the object which can be found in a ValStore or JsonStore. VarStores serve three main purposes:
-  1. give `Val`s human readable names
-  2. provide a mutable abstraction over top of an immutable one (i.e., `Val`s)
-  3. enable sharing of mutable state between multiple users (i.e., multiple users can co-edit a `Var`, each automatically receiving updates of the others changes).
-* `ValStore` - A key-value store and a wrapper around a JsonStore. ValStores handle \[de\]serializing (i.e., encoding more complex types down into pure JSON), as well as \[de\]normalizing (i.e., breaking out nested objects into their own entries in the JsonStore). This is useful for supporting objects that JSON doesn't handle natively, as well as for encoding objects in a way that is more efficient or performant (e.g., normalizing objects prevents lots of redundant information from being sent over the network when only a tiny portion of a large object is updated).
-* `JsonStore` - base class for wrappers around different object storage implementations (e.g., Filesystem, Browser IndexDB/LocalStorage, Postgres using JsonB column, etc.). These take JSON objects as keys and values and store them in the underlying key-value store using the hash of the JSON object as the key.
-
