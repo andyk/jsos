@@ -1,7 +1,7 @@
 # JSOS (Javascript Object Store)
 ## Object Persistence for JavaScript
 
-JSOS (JavaScript Object Store) is a framework for transparent object persistence, and sharing.
+JSOS (JavaScript Object Store) is a framework for easily persisting and sharing javascript objects.
 
 **Install**
 ```
@@ -71,7 +71,7 @@ Supports the following types of Javascript... "things":
 To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
 ## Using Supabase
-To use Supabase as a backend for Jsos, you need to
+To use Supabase as a backend for Jsos, you need to...
 
 1. Create 2 tables: one for the "vals" (map from hash to json object) and one for the "vars" (map from name, namespace to hash).
 2. Set up RPC's (i.e. create postgres functions) that allow for batched reads/writes of "vals".
@@ -189,6 +189,9 @@ ValStore {
   }
 }
 ```
+## Architecture
+![jsos-architecture-v1-2023-12-23](https://github.com/andyk/jsos/assets/228998/e6f3b982-e540-45ab-bfb1-530fd5f652ba)
+
 
 ## Core Abstractions
 * `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
