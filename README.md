@@ -70,7 +70,7 @@ Not supported:
 * This is not an Object Relational Mapper (ORM). While we support using a DBMS as a JSON key-value, we do not try to map any object oriented concepts to relational ones.
 
 ## Quick Summary
-To get started, you can use a JSOS `Var` to turn your JS "value" (which can be an object, class, primitive, data structure, etc.) into a "transparently persisted" equivalent of itself. For the types that support mutations (or transformations via an immutable-style interface)--i.e., things other than primitives--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated `Var` is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
+To get started, you can create a JSOS `Val` from your Javascript "thing" (which can be an object, class, primitive, data structure, etc.). For the things that support mutations (or transformations via an immutable-style interface)--at each mutation/transformation (either via a mutable `Var` or `ImmutableVar`), the new updated `Val` is transparently serialized and stored to (one or more) undelying ObjectStore implementations (e.g. to a Postgres JSONB column) as a new `Val`.
 
 ## Using Supabase
 To use Supabase as a backend for Jsos, you need to...
