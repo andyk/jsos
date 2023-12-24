@@ -45,14 +45,17 @@ The goal is to take (nearly) any JS/Typescript object or value and let you inter
 
 Another way to think of it is: what would it be like if SSD & hard disk storage was just another layer of the memory hierarchy, like main memory.
 
-# Supported Types
-Supports the following types of Javascript... "things":
+# Serialization Supported out-of-the-box
+The following are automatically serialized:
 * Objects (including prototype chain, preserves property descriptors)
 * Classes & class instances
 * Primitives, Arrays, POJOs, Set, Map
 * Date, RegExp
 * [Immutable.js](https://immutable-js.com/) objects (except for Record which is a TODO)
-* functions (serialization does not currently capture non-local scope)
+* Some functions (serialization does not currently capture non-local scope)
+
+Not supported:
+* Parent classes (or any transitive inheritance ancestors)
 
 # Supported Object Stores
 * Built-in Browser persistent storage (IndexDB & LocalStorage)
