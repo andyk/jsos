@@ -65,6 +65,7 @@ Not supported:
 * Allow developer to turn an in-memory object/primitive/etc. into an object that is automagically persisted (e.g., to the filesystem or a network service) without having to write any extra code.
 * Support many object stores out of the box; easy to add new ones.
 * Make it efficient to persist large & deeply nested objects (don't duplicate entire object for each change)
+* Easy fast efficient sharing of objects across users/applications/machines.
 
 ## Non-goals
 * This is not an Object Relational Mapper (ORM). While we support using a DBMS as a JSON key-value, we do not try to map any object oriented concepts to relational ones.
