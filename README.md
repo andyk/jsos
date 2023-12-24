@@ -46,7 +46,7 @@ The goal is to take (nearly) any JS/Typescript object or value and let you inter
 
 # Serialization Supported out-of-the-box
 The following are automatically serialized:
-* Objects (including prototype chain, preserves property descriptors)
+* Objects (including prototype chain and property descriptors)
 * Classes & class instances
 * Primitives, Arrays, POJOs, Set, Map
 * Date, RegExp
