@@ -76,7 +76,7 @@ To get started, you can create a JSOS `Val` from your Javascript "thing" (which 
 ![jsos-architecture-v8-2023-12-23](https://github.com/andyk/jsos/assets/228998/9aad9738-d857-44f4-bcec-8b57db59bd22)
 
 ## Core Abstractions
-* `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
+* `Var` - Conceptually, this is a mutable shared human readable reference to a Val. Think of it as a potentially shared tuple of (namespace/name, hash_of_val). The main way you interact with this concept is by creating instances of the `Var` class.
 * `Val` - An immutable content-addressed Object that is automatically normalized-then-serialized-then-written to persistent storage (via a "put") and then read-then-deserialized-then-denormalized back to their original form (via a "get") for the user to interact with.
   * We use content-based-hashing which allows for easy sharing of immutable state.
   * Normalization means that all nested objects are broken out into their own entry in the undelying JsonStore and replaced with their address
