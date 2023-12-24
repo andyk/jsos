@@ -43,7 +43,6 @@ JSOS provides persistence and sharing of Javascript objects without requiring an
 
 The goal is to take (nearly) any JS/Typescript object or value and let you interact with it as you normally would, while transparently persisting it to a variety of object stores (e.g., filesystem, browser persistent storage, Postgres, etc.).
 
-Another way to think of it is: what would it be like if SSD & hard disk storage was just another layer of the memory hierarchy, like main memory.
 
 # Serialization Supported out-of-the-box
 The following are automatically serialized:
