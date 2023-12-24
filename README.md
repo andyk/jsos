@@ -190,7 +190,7 @@ ValStore {
 }
 ```
 ## Architecture
-![jsos-architecture-v4-2023-12-23](https://github.com/andyk/jsos/assets/228998/37597560-3e78-497a-a46e-09e2ba182326)
+![jsos-architecture-v5-2023-12-23](https://github.com/andyk/jsos/assets/228998/9cc4bf18-98a5-4561-9f33-ab958aa7ad06)
 
 
 
