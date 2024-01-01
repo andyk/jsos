@@ -139,8 +139,9 @@ const useVar = (
         if (pendingChanges > 0 && !isUpdating) {
             console.log("calling updateDatabase")
             updateDatabase();
+            console.log("done with updateDatabase")
         } else {
-            console.log("not calling updateDatabase", pendingChanges, lastUpdatedVersion.current, isUpdating)
+            console.log("Update already in progress, so not calling updateDatabase, pending changes: ", pendingChanges)
         }
     }, [localVarObj, pendingChanges, isUpdating]);
 
