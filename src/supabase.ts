@@ -1,5 +1,4 @@
 import { createClient } from "@supabase/supabase-js";
-console.log("in jsos's supabase.ts")
 
 type CreateClientType = typeof createClient;
 

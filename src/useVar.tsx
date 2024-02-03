@@ -1,8 +1,10 @@
 import React from "react";
-import { Var, JsosSession } from "./jsos";
+import { Var, JsosSession, getDefaultSession } from "./jsos";
 import { SupabaseClient } from "@supabase/supabase-js";
 
 type ResolvedType<T> = T extends Promise<infer R> ? R : never;
+
+const waitBetweenVarUpdatesMS = 5000;
 
 // By default, uses Browser's IndexedDB for ValStore and Browser's Local Storage
 // for VarStore.
@@ -25,6 +27,8 @@ const useVar = (
     const [subscriptionID, setSubscriptionID] = React.useState<string | null>();
     const [pendingChanges, setPendingChanges] = React.useState<number>(0);
     const [isUpdating, setIsUpdating] = React.useState<boolean>(false);
+    const [lastUpdateTime, setLastUpdateTime] = React.useState<number>(Date.now()); // ms since epoch
+    const [finishedWaiting, setFinishedWaiting] = React.useState<number>(0);
     const lastUpdatedVersion = React.useRef(0);
     const loadedOnce = React.useRef<boolean>(false);
 
@@ -37,12 +41,15 @@ const useVar = (
         loadedOnce.current = true;
         // we have to wrap our Var in something since React tests to see if state
         // has changed using Object.is.
-        let initSess: JsosSession;
+        // we have to wrap our Var in something since React tests to see if state
+        // has changed using Object.is.
+        //let initSess: JsosSession = new JsosSession().addInMemory().addDefaultLocalStorage();
+        let initSess: JsosSession; 
         if (options?.supabaseClient) {
             console.log("initializing initSess from provided supabaseClient");
-            initSess = new JsosSession().addInMemory().addBrowserLocalStorage().addSupabase(options.supabaseClient);
+            initSess = new JsosSession().addInMemory().addDefaultLocalStorage().addSupabase(options.supabaseClient);
         } else {
-            //initSess = getDefaultSession();
+            initSess = getDefaultSession();
         }
         jsosSess.current = initSess;
 
@@ -92,7 +99,9 @@ const useVar = (
     }, []);
 
     React.useEffect(() => {
-        console.log("subscribed to var: ", subscriptionID);
+        if (subscriptionID === null) {
+            console.log("subscribed to var: ", subscriptionID);
+        }
     }, [subscriptionID]);
 
 
@@ -135,18 +144,23 @@ const useVar = (
     };
     
     React.useEffect(() => {
-        console.log(`in useEffect for pendingChanges, pendingChanges = ${pendingChanges}, lastUpdatedVersion.current = ${lastUpdatedVersion.current} `)
         if (pendingChanges > 0 && !isUpdating) {
-            console.log("calling updateDatabase")
-            updateDatabase();
-            console.log("done with updateDatabase")
+            // todo: if currentimeMS - lastUpdateTime > waitBetweenVarUpdatesMS, then updateDatabase
+            if (Date.now() - lastUpdateTime > waitBetweenVarUpdatesMS) {
+                console.log("calling updateDatabase from useEffect")
+                updateDatabase();
+                setLastUpdateTime(Date.now());
+                // set a timer to increment finishedWaiting after waitBetweenVarUpdatesMS
+                setTimeout(() => {
+                    setFinishedWaiting(Date.now());
+                }, waitBetweenVarUpdatesMS);
+            }
         } else {
-            console.log("Update already in progress, so not calling updateDatabase, pending changes: ", pendingChanges)
+            console.log("Update already in progress or no pending changes, so not calling updateDatabase. pending changes: ", pendingChanges)
         }
-    }, [localVarObj, pendingChanges, isUpdating]);
+    }, [localVarObj, pendingChanges, isUpdating, finishedWaiting]);
 
     async function updateVar(updateValOrFn: any) {
-        console.log("in updateVar");
         const v = jsosVar["Var"];
         if (!v) {
             return;
